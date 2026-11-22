@@ -113,13 +113,21 @@ object ComicImageLoader {
         refererUrl: String,
         retryKey: Int = 0
     ): ImageRequest {
+        val cacheKey = if (localFile != null) {
+            "${localFile.absolutePath}_${localFile.lastModified()}_${localFile.length()}"
+        } else {
+            imageUrl
+        }
         val builder = ImageRequest.Builder(context)
             .data(localFile ?: imageUrl)
-            .diskCacheKey(imageUrl)
-            .memoryCacheKey("${imageUrl}_r$retryKey")
+            .diskCacheKey(cacheKey)
+            .memoryCacheKey("${cacheKey}_r$retryKey")
             .crossfade(true)
 
-        if (localFile == null && refererUrl.isNotBlank()) {
+        if (localFile != null) {
+            // Avoid GL_MAX_TEXTURE_SIZE failures on tall stitched webtoon strips
+            builder.allowHardware(false)
+        } else if (refererUrl.isNotBlank()) {
             builder.addHeader(HEADER_REFERER_SOURCE, refererUrl)
         }
         return builder.build()

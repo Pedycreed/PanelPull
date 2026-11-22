@@ -407,4 +407,73 @@ class ExampleRobolectricTest {
             )
         )
     }
+
+    @Test
+    fun `smart stitch persists output files to room and safely re-stitches inside same outputDir`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.data.local.AppDatabase::class.java
+        ).allowMainThreadQueries().build()
+
+        val tempRoot = java.io.File(context.cacheDir, "smartstitch_persist_test_${System.currentTimeMillis()}").apply { mkdirs() }
+        val repo = com.example.data.local.LibraryRepository(db.comicDao(), tempRoot)
+        val engine = com.example.data.stitch.SmartStitchEngine(context)
+
+        try {
+            val outDir = repo.getStitchedChapterDir("Test Manhwa", "19", "Capítulo 19")
+            val f1 = java.io.File(outDir, "001.jpg")
+            val f2 = java.io.File(outDir, "002.jpg")
+            listOf(f1, f2).forEach { file ->
+                val bmp = android.graphics.Bitmap.createBitmap(400, 600, android.graphics.Bitmap.Config.ARGB_8888)
+                android.graphics.Canvas(bmp).drawColor(android.graphics.Color.WHITE)
+                java.io.FileOutputStream(file).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+                bmp.recycle()
+            }
+
+            // Re-stitch directly from files inside outDir -> atomic staging must NOT delete inputs before reading
+            val result = kotlinx.coroutines.runBlocking {
+                engine.stitchFiles(
+                    inputFiles = listOf(f1, f2),
+                    outputDir = outDir,
+                    galleryRelativePath = null,
+                    config = com.example.data.stitch.SmartStitchConfig(
+                        detectorMode = com.example.data.stitch.StitchDetectorMode.SINGLE_STRIP,
+                        outputFormat = com.example.data.stitch.StitchOutputFormat.JPEG,
+                        saveToGallery = false
+                    ),
+                    onProgress = {}
+                )
+            }
+
+            assertEquals(2, result.inputPageCount)
+            assertEquals(1, result.outputFiles.size)
+            assertEquals(1200, result.outputFiles[0].height)
+            assertTrue(result.outputFiles[0].file.exists() && result.outputFiles[0].file.length() > 100L)
+
+            val saved = kotlinx.coroutines.runBlocking {
+                repo.saveStitchedChapterToLibrary(
+                    seriesTitle = "Test Manhwa",
+                    chapterNumber = "19",
+                    chapterLabel = "Capítulo 19 (SmartStitch)",
+                    comicFormat = "MANHWA",
+                    sourceHost = "SmartStitch",
+                    sourceUrlKey = "https://comix.to/title/test/19#smartstitch",
+                    outputDir = outDir,
+                    stitchedFiles = result.outputFiles
+                )
+            }
+            val reloaded = kotlinx.coroutines.runBlocking {
+                repo.getChapterWithPagesBySourceUrl("https://comix.to/title/test/19#smartstitch")
+            }
+
+            assertNotNull(reloaded)
+            assertEquals(saved.chapter.id, reloaded!!.chapter.id)
+            assertEquals(1, reloaded.pages.size)
+            assertTrue(java.io.File(reloaded.pages[0].localFilePath!!).exists())
+        } finally {
+            db.close()
+            tempRoot.deleteRecursively()
+        }
+    }
 }

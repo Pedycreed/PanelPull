@@ -1,6 +1,12 @@
 package com.example.ui.components
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
+import android.graphics.Rect
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +16,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -53,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -64,6 +73,8 @@ import coil.compose.SubcomposeAsyncImage
 import com.example.data.extractor.ComicImageLoader
 import com.example.data.local.ChapterWithPages
 import com.example.data.local.PageEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -241,51 +252,68 @@ fun PageReaderDialog(
                             .fillMaxWidth()
                             .background(Color(0xFF0D0C14))
                     ) {
-                        SubcomposeAsyncImage(
-                            model = request,
-                            imageLoader = imageLoader,
-                            contentDescription = "Página ${page.pageIndex + 1}",
-                            contentScale = ContentScale.FillWidth,
-                            modifier = Modifier.fillMaxWidth(),
-                            loading = {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(360.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = Color.White,
-                                        strokeWidth = 2.5.dp,
-                                        modifier = Modifier.size(30.dp)
+                        val isTallLocalStrip = localFile != null && (page.height > 2400 || page.localFilePath.contains("SmartStitch", ignoreCase = true))
+                        if (isTallLocalStrip) {
+                            TiledLocalStripImage(
+                                file = localFile,
+                                pageIndex = page.pageIndex,
+                                fallbackContent = {
+                                    SubcomposeAsyncImage(
+                                        model = request,
+                                        imageLoader = imageLoader,
+                                        contentDescription = "Página ${page.pageIndex + 1}",
+                                        contentScale = ContentScale.FillWidth,
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
-                            },
-                            error = {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(260.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            )
+                        } else {
+                            SubcomposeAsyncImage(
+                                model = request,
+                                imageLoader = imageLoader,
+                                contentDescription = "Página ${page.pageIndex + 1}",
+                                contentScale = ContentScale.FillWidth,
+                                modifier = Modifier.fillMaxWidth(),
+                                loading = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(360.dp),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Text(
-                                            text = "Falha ao carregar página ${page.pageIndex + 1}",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = Color(0xFFB8B3CC)
+                                        CircularProgressIndicator(
+                                            color = Color.White,
+                                            strokeWidth = 2.5.dp,
+                                            modifier = Modifier.size(30.dp)
                                         )
-                                        FilledTonalButton(onClick = { retryKey++ }) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null)
-                                            Spacer(Modifier.width(6.dp))
-                                            Text("Recarregar página")
+                                    }
+                                },
+                                error = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(260.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "Falha ao carregar página ${page.pageIndex + 1}",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = Color(0xFFB8B3CC)
+                                            )
+                                            FilledTonalButton(onClick = { retryKey++ }) {
+                                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Recarregar página")
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
                         if (!webtoonSeamless) {
                             Surface(
                                 color = Color(0xB30D0C14),
@@ -319,6 +347,96 @@ fun PageReaderDialog(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TiledLocalStripImage(
+    file: File,
+    pageIndex: Int,
+    fallbackContent: @Composable () -> Unit
+) {
+    val fileKey = "${file.absolutePath}_${file.lastModified()}_${file.length()}"
+    var tiles by remember(fileKey) { mutableStateOf<List<Bitmap>?>(null) }
+    var useFallback by remember(fileKey) { mutableStateOf(false) }
+
+    LaunchedEffect(fileKey) {
+        val decoded = withContext(Dispatchers.IO) {
+            try {
+                val decoder: BitmapRegionDecoder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    BitmapRegionDecoder.newInstance(file.absolutePath)
+                } else {
+                    @Suppress("DEPRECATION")
+                    BitmapRegionDecoder.newInstance(file.absolutePath, false)
+                }
+
+                try {
+                    val width = decoder.width
+                    val height = decoder.height
+                    if (width <= 0 || height <= 0) return@withContext null
+
+                    val sample = if (width > 1600) 2 else 1
+                    val tileHeight = 1600
+                    val result = mutableListOf<Bitmap>()
+                    var top = 0
+                    val opts = BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    }
+                    while (top < height) {
+                        val bottom = minOf(top + tileHeight, height)
+                        val region = decoder.decodeRegion(Rect(0, top, width, bottom), opts)
+                        if (region != null) {
+                            result.add(region)
+                        }
+                        top = bottom
+                    }
+                    result.takeIf { it.isNotEmpty() }
+                } finally {
+                    decoder.recycle()
+                }
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        if (decoded != null) {
+            tiles = decoded
+        } else {
+            useFallback = true
+        }
+    }
+
+    when {
+        useFallback -> fallbackContent()
+        tiles == null -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(360.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.5.dp,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+        }
+        else -> {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                tiles!!.forEachIndexed { idx, bmp ->
+                    val ratio = (bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat()).coerceAtLeast(0.05f)
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "Tira ${pageIndex + 1} parte ${idx + 1}",
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(ratio)
+                    )
                 }
             }
         }

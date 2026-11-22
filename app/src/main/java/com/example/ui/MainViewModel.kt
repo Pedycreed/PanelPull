@@ -54,7 +54,9 @@ sealed interface ExtractionUiState {
         val seriesTitle: String,
         val comicFormatLabel: String,
         val detectedChapters: List<DetectedChapterLink>,
-        val usedAiFilter: Boolean
+        val usedAiFilter: Boolean,
+        val stitchedChapterWithPages: ChapterWithPages? = null,
+        val viewingStitched: Boolean = false
     ) : ExtractionUiState
     data class Error(val message: String) : ExtractionUiState
 }
@@ -121,7 +123,9 @@ sealed interface SmartStitchUiState {
         val chapterWithPages: ChapterWithPages,
         val seriesTitle: String,
         val inputPageCount: Int,
-        val targetWidth: Int
+        val targetWidth: Int,
+        val gallerySavedCount: Int = 0,
+        val restoredFromLibrary: Boolean = false
     ) : SmartStitchUiState
     data class Error(val message: String) : SmartStitchUiState
 }
@@ -411,17 +415,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val stored = libraryRepository.saveExtractionToLibrary(finalResult)
+        val existingStitched = loadValidStitchedVersion(stored.chapter.sourceUrl)
         _extractionState.value = ExtractionUiState.Success(
             chapterWithPages = stored,
             seriesTitle = finalResult.seriesTitle,
             comicFormatLabel = finalResult.comicFormat.label,
             detectedChapters = finalResult.detectedChapters,
-            usedAiFilter = finalResult.usedAiFilter
+            usedAiFilter = finalResult.usedAiFilter,
+            stitchedChapterWithPages = existingStitched,
+            viewingStitched = false
         )
 
         if (prefs.autoDownloadOnExtract && stored.pages.isNotEmpty()) {
             downloadChapter(stored.chapter.id, finalResult.seriesTitle)
         }
+    }
+
+    fun setViewingStitched(showStitched: Boolean) {
+        val current = _extractionState.value as? ExtractionUiState.Success ?: return
+        if (showStitched && current.stitchedChapterWithPages == null) return
+        _extractionState.value = current.copy(viewingStitched = showStitched)
+    }
+
+    private suspend fun loadValidStitchedVersion(rawSourceUrl: String): ChapterWithPages? {
+        val stitchedKey = "${rawSourceUrl.removeSuffix("#smartstitch")}#smartstitch"
+        val existing = libraryRepository.getChapterWithPagesBySourceUrl(stitchedKey) ?: return null
+        val validPages = existing.pages.filter { p ->
+            val path = p.localFilePath
+            !path.isNullOrBlank() && File(path).let { it.exists() && it.length() > 100L }
+        }
+        return if (validPages.isNotEmpty()) existing.copy(pages = validPages) else null
     }
 
     fun toggleDetectedChapterSelection(url: String) {
@@ -781,6 +804,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             seriesTitle = seriesTitle,
             comicFormat = comicFormat
         )
+        // Restore any already-persisted SmartStitch strips for this chapter immediately
+        viewModelScope.launch {
+            val persisted = loadValidStitchedVersion(chapterWithPages.chapter.sourceUrl)
+            if (persisted != null && _smartStitchState.value is SmartStitchUiState.Idle) {
+                val width = persisted.pages.firstOrNull()?.width ?: 0
+                _smartStitchState.value = SmartStitchUiState.Success(
+                    chapterWithPages = persisted,
+                    seriesTitle = seriesTitle,
+                    inputPageCount = chapterWithPages.pages.size,
+                    targetWidth = width,
+                    gallerySavedCount = 0,
+                    restoredFromLibrary = true
+                )
+            }
+        }
     }
 
     fun openSmartStitchForGallery(uris: List<Uri>) {
@@ -841,32 +879,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             "${ch.chapterLabel} (SmartStitch)"
                         }
+                        val normalizedStitchedKey = "${ch.sourceUrl.removeSuffix("#smartstitch")}#smartstitch"
                         val savedChapter = libraryRepository.saveStitchedChapterToLibrary(
                             seriesTitle = target.seriesTitle,
                             chapterNumber = ch.chapterNumber,
                             chapterLabel = stitchedLabel,
                             comicFormat = target.comicFormat,
                             sourceHost = "SmartStitch",
-                            sourceUrlKey = "${ch.sourceUrl}#smartstitch",
+                            sourceUrlKey = normalizedStitchedKey,
                             outputDir = outputDir,
                             stitchedFiles = result.outputFiles
                         )
+
+                        // Persist & reflect immediately on the Extractor tab if this chapter is currently open
+                        val currentExtract = _extractionState.value as? ExtractionUiState.Success
+                        if (currentExtract != null) {
+                            val extractBaseUrl = currentExtract.chapterWithPages.chapter.sourceUrl.removeSuffix("#smartstitch")
+                            val targetBaseUrl = ch.sourceUrl.removeSuffix("#smartstitch")
+                            if (currentExtract.chapterWithPages.chapter.id == ch.id || extractBaseUrl == targetBaseUrl) {
+                                _extractionState.value = currentExtract.copy(
+                                    stitchedChapterWithPages = savedChapter,
+                                    viewingStitched = true
+                                )
+                            }
+                        }
 
                         _smartStitchState.value = SmartStitchUiState.Success(
                             chapterWithPages = savedChapter,
                             seriesTitle = target.seriesTitle,
                             inputPageCount = result.inputPageCount,
-                            targetWidth = result.targetWidth
+                            targetWidth = result.targetWidth,
+                            gallerySavedCount = result.gallerySavedCount,
+                            restoredFromLibrary = false
                         )
                         _snackbarEvents.tryEmit(
-                            "SmartStitch pronto: ${result.inputPageCount} páginas → ${result.outputFiles.size} tiras!"
+                            "SmartStitch salvo: ${result.inputPageCount} páginas → ${result.outputFiles.size} tiras!"
                         )
                     }
 
                     is SmartStitchTarget.GalleryImages -> {
                         if (target.uris.isEmpty()) {
                             _smartStitchState.value = SmartStitchUiState.Error(
-                                "Toque em Galeria para selecionar as páginas que deseja juntar."
+                                "Toque em Galeria acima para selecionar as páginas que deseja juntar."
                             )
                             return@launch
                         }
@@ -924,10 +978,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 chapterWithPages = savedChapter,
                                 seriesTitle = "SmartStitch",
                                 inputPageCount = result.inputPageCount,
-                                targetWidth = result.targetWidth
+                                targetWidth = result.targetWidth,
+                                gallerySavedCount = result.gallerySavedCount,
+                                restoredFromLibrary = false
                             )
                             _snackbarEvents.tryEmit(
-                                "SmartStitch pronto: ${result.inputPageCount} imagens → ${result.outputFiles.size} tiras!"
+                                "SmartStitch salvo: ${result.inputPageCount} imagens → ${result.outputFiles.size} tiras!"
                             )
                         } finally {
                             tempDir.deleteRecursively()
@@ -936,7 +992,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: OutOfMemoryError) {
+                Log.e(TAG, "SmartStitch OOM", e)
+                _smartStitchState.value = SmartStitchUiState.Error(
+                    "Memória insuficiente para essa altura/largura. Tente diminuir a Altura de Corte (ex: 3000px–5000px) ou usar Largura Personalizada 720px."
+                )
+            } catch (e: Throwable) {
                 Log.e(TAG, "SmartStitch failed", e)
                 _smartStitchState.value = SmartStitchUiState.Error(
                     e.localizedMessage ?: "Falha ao processar SmartStitch."

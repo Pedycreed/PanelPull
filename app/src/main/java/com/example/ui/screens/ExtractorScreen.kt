@@ -56,6 +56,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -131,6 +132,7 @@ fun ExtractorScreen(
     onOpenInstallAppSheet: () -> Unit,
     onOpenSmartStitchChapter: (ChapterWithPages, seriesTitle: String, comicFormat: String) -> Unit,
     onOpenSmartStitchGallery: () -> Unit,
+    onToggleViewingStitched: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -678,8 +680,15 @@ fun ExtractorScreen(
                 }
 
                 is ExtractionUiState.Success -> {
-                    val chapter = state.chapterWithPages.chapter
-                    val pages = state.chapterWithPages.pages.sortedBy { it.pageIndex }
+                    val activeChapterWithPages = if (state.viewingStitched && state.stitchedChapterWithPages != null) {
+                        state.stitchedChapterWithPages
+                    } else {
+                        state.chapterWithPages
+                    }
+                    val chapter = activeChapterWithPages.chapter
+                    val pages = activeChapterWithPages.pages.sortedBy { it.pageIndex }
+                    val originalCount = state.chapterWithPages.pages.size
+                    val stitchedCount = state.stitchedChapterWithPages?.pages?.size ?: 0
 
                     // Detected Chapter Links (Series Index Batch Downloader)
                     if (state.detectedChapters.isNotEmpty()) {
@@ -851,20 +860,44 @@ fun ExtractorScreen(
                                         }
                                     }
 
-                                    Button(
-                                        onClick = { onDownloadChapter(chapter.id, state.seriesTitle) },
-                                        enabled = downloadProgress == null,
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary
-                                        ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(48.dp)
-                                            .testTag("download_chapter_button")
-                                    ) {
-                                        Icon(Icons.Default.Download, contentDescription = null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("${stringResource(R.string.action_download_chapter)} (${pages.size})")
+                                    if (state.stitchedChapterWithPages != null) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            FilterChip(
+                                                selected = !state.viewingStitched,
+                                                onClick = { onToggleViewingStitched(false) },
+                                                label = { Text("Originais ($originalCount)", maxLines = 1) },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            FilterChip(
+                                                selected = state.viewingStitched,
+                                                onClick = { onToggleViewingStitched(true) },
+                                                label = { Text("SmartStitch ($stitchedCount tiras)", maxLines = 1) },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("extractor_view_stitched_chip")
+                                            )
+                                        }
+                                    }
+
+                                    if (!state.viewingStitched) {
+                                        Button(
+                                            onClick = { onDownloadChapter(chapter.id, state.seriesTitle) },
+                                            enabled = downloadProgress == null,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(48.dp)
+                                                .testTag("download_chapter_button")
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("${stringResource(R.string.action_download_chapter)} (${pages.size})")
+                                        }
                                     }
 
                                     FilledTonalButton(
@@ -882,7 +915,14 @@ fun ExtractorScreen(
                                     ) {
                                         Icon(Icons.Default.ViewAgenda, contentDescription = null)
                                         Spacer(Modifier.width(8.dp))
-                                        Text("Juntar Páginas (SmartStitch)", maxLines = 1)
+                                        Text(
+                                            text = if (state.stitchedChapterWithPages != null) {
+                                                "Configurar / Refazer SmartStitch"
+                                            } else {
+                                                "Juntar Páginas (SmartStitch)"
+                                            },
+                                            maxLines = 1
+                                        )
                                     }
                                 }
                             }

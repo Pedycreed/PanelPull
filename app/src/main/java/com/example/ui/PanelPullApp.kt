@@ -253,7 +253,8 @@ fun PanelPullApp(
                                 },
                                 onOpenSmartStitchGallery = {
                                     viewModel.openSmartStitchForGallery(emptyList())
-                                }
+                                },
+                                onToggleViewingStitched = viewModel::setViewingStitched
                             )
                         }
 
@@ -304,33 +305,6 @@ fun PanelPullApp(
                             )
                         }
                     }
-                }
-            }
-
-            // Fullscreen Webtoon / Page Reader Overlay
-            val openChapterId = readerChapterId
-            if (openChapterId != null) {
-                val chapterFlow = remember(openChapterId) { viewModel.observeChapter(openChapterId) }
-                val chapterWithPages by chapterFlow.collectAsStateWithLifecycle(initialValue = null)
-                val resolvedChapter = chapterWithPages
-                if (resolvedChapter != null) {
-                    val seriesName = library
-                        .firstOrNull { s -> s.chapters.any { it.chapter.id == resolvedChapter.chapter.id } }
-                        ?.series?.title ?: "PanelPull"
-                    PageReaderDialog(
-                        chapterWithPages = resolvedChapter,
-                        initialPageIndex = readerInitialPage,
-                        onDismiss = viewModel::closeReader,
-                        onCopyPage = viewModel::copyPageImage,
-                        onDownloadPage = { page ->
-                            viewModel.downloadSinglePage(page, resolvedChapter.chapter, seriesName)
-                        },
-                        onSharePage = viewModel::sharePage,
-                        onAnalyzePage = { page ->
-                            viewModel.loadPageForAiAnalysis(page, seriesName)
-                            navigateToTab(ROUTE_AI_ANALYZER)
-                        }
-                    )
                 }
             }
 
@@ -396,13 +370,40 @@ fun PanelPullApp(
                     onRunStitch = viewModel::runSmartStitch,
                     onCancelStitch = viewModel::cancelSmartStitch,
                     onOpenStitchedReader = { chId, pageIdx ->
-                        viewModel.closeSmartStitch()
                         viewModel.openReader(chId, pageIdx)
                     },
                     onCopyStitchedPage = viewModel::copyPageImage,
                     onShareStitchedPage = viewModel::sharePage,
                     onExportStitchedCbz = viewModel::exportChapterAsCbz
                 )
+            }
+
+            // Fullscreen Webtoon / Page Reader Overlay (rendered on top of SmartStitch so Back returns to results)
+            val openChapterId = readerChapterId
+            if (openChapterId != null) {
+                val chapterFlow = remember(openChapterId) { viewModel.observeChapter(openChapterId) }
+                val chapterWithPages by chapterFlow.collectAsStateWithLifecycle(initialValue = null)
+                val resolvedChapter = chapterWithPages
+                if (resolvedChapter != null) {
+                    val seriesName = library
+                        .firstOrNull { s -> s.chapters.any { it.chapter.id == resolvedChapter.chapter.id } }
+                        ?.series?.title ?: "PanelPull"
+                    PageReaderDialog(
+                        chapterWithPages = resolvedChapter,
+                        initialPageIndex = readerInitialPage,
+                        onDismiss = viewModel::closeReader,
+                        onCopyPage = viewModel::copyPageImage,
+                        onDownloadPage = { page ->
+                            viewModel.downloadSinglePage(page, resolvedChapter.chapter, seriesName)
+                        },
+                        onSharePage = viewModel::sharePage,
+                        onAnalyzePage = { page ->
+                            viewModel.loadPageForAiAnalysis(page, seriesName)
+                            viewModel.closeSmartStitch()
+                            navigateToTab(ROUTE_AI_ANALYZER)
+                        }
+                    )
+                }
             }
         }
     }

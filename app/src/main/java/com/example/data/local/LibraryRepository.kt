@@ -143,7 +143,8 @@ class LibraryRepository(
                     folderPath = outputDir.absolutePath,
                     pageCount = stitchedFiles.size,
                     downloadedCount = stitchedFiles.size,
-                    status = DownloadStatus.COMPLETED.name
+                    status = DownloadStatus.COMPLETED.name,
+                    createdAt = System.currentTimeMillis()
                 )
             )
             existingChapter.id
@@ -194,6 +195,12 @@ class LibraryRepository(
 
     suspend fun getChapterById(chapterId: Long): ChapterEntity? =
         dao.getChapterById(chapterId)
+
+    suspend fun getChapterWithPagesBySourceUrl(sourceUrl: String): ChapterWithPages? {
+        val ch = dao.getChapterBySourceUrl(sourceUrl) ?: return null
+        val pages = dao.getPagesForChapter(ch.id)
+        return ChapterWithPages(ch, pages)
+    }
 
     suspend fun updatePageDownload(
         pageId: Long,
