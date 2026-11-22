@@ -43,9 +43,9 @@ class PanelAiRepository {
                     values = listOf("MANHWA", "MANGA", "WEBTOON"),
                     description = "Detected comic format"
                 ),
-                "keptIndices" to Schema.array(
-                    items = Schema.integer("Zero-based index of actual comic story pages to keep"),
-                    description = "Indices of real comic pages, excluding ads, logos, avatars, and site banners"
+                "excludedIndices" to Schema.array(
+                    items = Schema.integer("Zero-based index of NON-story noise images to REMOVE (ads, logos, scanlator credit banners, avatars, unrelated covers)"),
+                    description = "Only indices of obvious ads, logos, avatars, banners, or unrelated covers. Leave empty if all candidates are real comic pages."
                 )
             )
         )
@@ -92,20 +92,44 @@ class PanelAiRepository {
             )
         }
 
-        val capped = candidates.take(120)
+        // For large chapters, inspect the first 20, last 20, and any URLs from outlier hosts
+        // so uniform middle story pages are NEVER truncated regardless of chapter length (100–500+ pages).
+        val dominantHost = candidates
+            .mapNotNull { runCatching { java.net.URI(it.imageUrl).host?.lowercase() }.getOrNull() }
+            .groupingBy { it }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.key
+
+        val sampleToInspect = if (candidates.size <= 80) {
+            candidates
+        } else {
+            val selected = LinkedHashSet<ExtractedPageCandidate>()
+            selected.addAll(candidates.take(20))
+            candidates.forEach { item ->
+                val h = runCatching { java.net.URI(item.imageUrl).host?.lowercase() }.getOrNull()
+                if (dominantHost != null && h != dominantHost) {
+                    selected.add(item)
+                }
+            }
+            selected.addAll(candidates.takeLast(20))
+            selected.toList().sortedBy { it.index }.take(80)
+        }
+
         val listing = buildString {
             appendLine("URL: $sourceUrl")
             appendLine("Page title: $rawTitle")
-            appendLine("Candidate images:")
-            capped.forEach { item ->
+            appendLine("Total pages extracted: ${candidates.size}")
+            appendLine("Candidate images to audit:")
+            sampleToInspect.forEach { item ->
                 appendLine("[${item.index}] ${item.imageUrl} (alt='${item.altText}', size=${item.widthHint}x${item.heightHint})")
             }
         }
         val prompt = """
             Você é um filtro de extração para mangás, manhwas e webtoons.
             1) Identifique o nome limpo da obra (seriesTitle), o número do capítulo (chapterNumber) e o formato (MANHWA, MANGA ou WEBTOON).
-            2) Em keptIndices, mantenha SOMENTE os índices que parecem ser páginas reais do capítulo da história.
-            3) Exclua anúncios, banners de scanlator/Discord/Pix/doações, avatares, ícones de UI e miniaturas de outras obras.
+            2) Em excludedIndices, liste SOMENTE os índices que forem CLARAMENTE anúncios, banners de scanlator/Discord/Pix/doações, avatares, ícones de UI ou capas de outras obras.
+            3) NUNCA exclua páginas reais do capítulo. Se todas parecerem páginas válidas do capítulo, retorne excludedIndices vazio [].
             $listing
         """.trimIndent()
 
@@ -122,14 +146,25 @@ class PanelAiRepository {
             "WEBTOON" -> ComicFormat.WEBTOON
             else -> ComicFormat.MANHWA
         }
-        val array = json.optJSONArray("keptIndices")
-        val kept = if (array != null) {
-            (0 until array.length()).map { array.getInt(it) }
-                .filter { it in candidates.indices }
-                .distinct()
+
+        val validIndexSet = candidates.map { it.index }.toSet()
+        val excludedArray = json.optJSONArray("excludedIndices")
+        val excluded = if (excludedArray != null) {
+            (0 until excludedArray.length())
+                .mapNotNull { i -> excludedArray.optInt(i, -1).takeIf { it in validIndexSet } }
+                .toSet()
         } else {
-            candidates.map { it.index }
+            emptySet()
         }
+
+        // Guardrail: never allow AI noise filter to wipe out >30% of a multi-page chapter
+        val safeExcluded = if (candidates.size >= 10 && excluded.size > (candidates.size * 0.30).toInt()) {
+            emptySet()
+        } else {
+            excluded
+        }
+
+        val kept = candidates.map { it.index }.filterNot { it in safeExcluded }
         return AiExtractionFilterResult(
             seriesTitle = series,
             chapterNumber = chapter,

@@ -379,4 +379,32 @@ class ExampleRobolectricTest {
             tempRoot.deleteRecursively()
         }
     }
+
+    @Test
+    fun `webview extraction merges all same-cdn sniffed pages beyond 22 and rejects third-party ads`() {
+        val dom22 = (1..22).map { i -> "https://wowpic.comix.to/files/2922186/${i.toString().padStart(3, '0')}.webp" }
+        val sniffed60 = (1..60).map { i -> "https://wowpic.comix.to/files/2922186/${i.toString().padStart(3, '0')}.webp" } +
+            listOf("https://random-ad-network.example/banner/promo.jpg")
+
+        val jsonImages = dom22.joinToString(",") { "\"$it\"" }
+        val rawJson = """{"url":"https://comix.to/title/vlxz-test/2922186-chapter-19","title":"Ch 19","images":[$jsonImages],"chapters":[],"source":"dom","readyState":"complete","atBottom":true,"scrollProgressPercent":100,"domImageCount":22}"""
+
+        val payload = com.example.ui.components.WebViewJsScripts.parseExtractionJson(
+            rawJson = rawJson,
+            fallbackUrl = "https://comix.to",
+            fallbackTitle = "Comix",
+            sniffedSnapshot = sniffed60
+        )
+
+        assertEquals(60, payload.images.size)
+        assertTrue(payload.atBottom)
+        assertEquals(100, payload.scrollProgressPercent)
+        assertTrue(payload.images.none { it.contains("random-ad-network") })
+        // Verify hash containing "cover" inside a random CDN filename is not falsely rejected
+        assertTrue(
+            com.example.ui.components.WebViewJsScripts.isLikelySniffedComicImage(
+                "https://wowpic.comix.to/files/2922186/abc9cover87xyz.webp"
+            )
+        )
+    }
 }

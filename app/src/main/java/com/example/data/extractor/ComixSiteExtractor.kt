@@ -112,9 +112,9 @@ class ComixSiteExtractor(
 
         // 3. Fetch chapter list so batch auto-download works directly from either series or chapter URL
         val chaptersJson = fetchJson(
-            "$baseOrigin/api/v2/manga/${parts.hashId}/chapters?limit=100&order[number]=asc",
+            "$baseOrigin/api/v2/manga/${parts.hashId}/chapters?limit=500&order[number]=asc",
             sourceUrl
-        ) ?: fetchJson("$baseOrigin/api/v2/manga/${parts.hashId}/chapters?limit=100", sourceUrl)
+        ) ?: fetchJson("$baseOrigin/api/v2/manga/${parts.hashId}/chapters?limit=500", sourceUrl)
 
         val detectedChapters = if (chaptersJson != null) {
             parseChaptersListApiResponse(
@@ -173,7 +173,10 @@ class ComixSiteExtractor(
                         .ifBlank { entry.optString("src") }
                         .ifBlank { entry.optString("image") }
                         .ifBlank { entry.optString("image_url") }
+                        .ifBlank { entry.optString("imageUrl") }
                         .ifBlank { entry.optString("file") }
+                        .ifBlank { entry.optString("original") }
+                        .ifBlank { entry.optString("path") }
                     if (imgUrl.startsWith("http://") || imgUrl.startsWith("https://")) {
                         pages.add(
                             ExtractedPageCandidate(
@@ -243,7 +246,7 @@ class ComixSiteExtractor(
         }
         return links.values
             .sortedBy { it.chapterNumber.toDoubleOrNull() ?: Double.MAX_VALUE }
-            .take(150)
+            .take(300)
     }
 
     private fun fetchJson(apiUrl: String, refererUrl: String): JSONObject? {

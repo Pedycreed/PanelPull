@@ -85,29 +85,44 @@ fun HeadlessWebViewExtractor(
             source = "none",
             readyState = "loading"
         )
+        val cumulativeImages = LinkedHashSet<String>()
         var lastCount = 0
-        var stableTicks = 0
+        var stableBottomTicks = 0
+        var stableStructuredTicks = 0
         var scrolledSteps = 0
 
-        // Poll up to ~18 seconds (20 ticks x 900ms)
-        for (tick in 0 until 20) {
-            delay(900L)
+        // Poll up to ~32 seconds (50 ticks x ~650ms) so long 80–200 page webtoon chapters sweep completely
+        for (tick in 0 until 50) {
+            delay(if (tick < 3) 850L else 600L)
 
-            // Ensure network hook is active even if JS replaced window state during SPA navigation
+            // Ensure network + DOM mutation/scroll hook is active even after SPA route transitions
             wv.evaluateJavascript(WebViewJsScripts.buildNetworkHookScript(), null)
 
             if (tick == 1) {
                 latestOnStage("Executando JavaScript da página…")
-            } else if (tick == 4) {
+            } else if (tick == 3 && cumulativeImages.isEmpty()) {
                 latestOnStage("Aguardando carregamento das imagens do capítulo…")
-            } else if (tick == 9) {
-                latestOnStage("Capturando páginas dinâmicas (modo automático)…")
             }
 
-            // Gently scroll to trigger IntersectionObserver / lazy-loading comic readers
-            if (pageFinishedOnce && scrolledSteps < 8 && tick >= 2) {
+            // Adaptive full-chapter scroll: sweep down through the entire webtoon/manhwa strip
+            // so IntersectionObserver, lazy-loaders, and virtualized React lists hydrate every page.
+            if ((pageFinishedOnce || tick >= 3) && tick >= 2) {
                 wv.evaluateJavascript(
-                    "(function(){ window.scrollBy(0, 1400); })();",
+                    """
+                    (function() {
+                      if (typeof window.__PANELPULL_COLLECT_DOM === 'function') {
+                        window.__PANELPULL_COLLECT_DOM();
+                      }
+                      var docEl = document.documentElement || document.body;
+                      var scrollH = Math.max((docEl && docEl.scrollHeight) || 0, (document.body && document.body.scrollHeight) || 0);
+                      var winH = window.innerHeight || 844;
+                      var step = Math.max(Math.round(winH * 2.2), Math.min(4500, Math.round(scrollH / 16)));
+                      window.scrollBy(0, step);
+                      if (typeof window.__PANELPULL_COLLECT_DOM === 'function') {
+                        setTimeout(window.__PANELPULL_COLLECT_DOM, 180);
+                      }
+                    })();
+                    """.trimIndent(),
                     null
                 )
                 scrolledSteps++
@@ -122,53 +137,56 @@ fun HeadlessWebViewExtractor(
                 sniffedSnapshot = sniffedSnapshot
             )
 
-            if (parsed.images.size >= bestPayload.images.size) {
-                bestPayload = parsed.copy(
-                    chapters = if (parsed.chapters.isNotEmpty()) parsed.chapters else bestPayload.chapters
-                )
-            } else if (parsed.chapters.size > bestPayload.chapters.size) {
-                bestPayload = bestPayload.copy(chapters = parsed.chapters)
+            // If structured API/next_f returned a clean larger list, make it the ordered base;
+            // otherwise accumulate across ticks so virtualized readers never lose earlier pages.
+            if ((parsed.source == "api" || parsed.source == "next_f") && parsed.images.size >= cumulativeImages.size) {
+                cumulativeImages.clear()
+                cumulativeImages.addAll(parsed.images)
+            } else {
+                cumulativeImages.addAll(parsed.images)
             }
+
+            bestPayload = parsed.copy(
+                images = cumulativeImages.toList(),
+                chapters = if (parsed.chapters.size >= bestPayload.chapters.size) parsed.chapters else bestPayload.chapters
+            )
 
             val count = bestPayload.images.size
             if (count > 0) {
-                latestOnStage("$count páginas detectadas, finalizando…")
+                val pctSuffix = if (parsed.scrollProgressPercent in 1..99) " (${parsed.scrollProgressPercent}%)" else ""
+                latestOnStage("Varrendo capítulo… $count páginas detectadas$pctSuffix")
             }
 
-            // Fast completion when structured API or stitched __next_f already delivered full page array
-            if ((bestPayload.source == "api" || bestPayload.source == "next_f") && count >= 2) {
-                delay(700L)
-                // One last read to also pick up any chapter links that arrived alongside images
-                val finalRaw = evaluateJsSuspend(wv, WebViewJsScripts.buildSmartExtractionScript())
-                val finalSniff = synchronized(sniffedImageUrls) { sniffedImageUrls.toList() }
-                val finalParsed = WebViewJsScripts.parseExtractionJson(
-                    rawJson = finalRaw,
-                    fallbackUrl = currentUrl,
-                    fallbackTitle = currentTitle,
-                    sniffedSnapshot = finalSniff
-                )
-                if (finalParsed.images.size >= bestPayload.images.size) {
-                    bestPayload = finalParsed.copy(
-                        chapters = if (finalParsed.chapters.isNotEmpty()) finalParsed.chapters else bestPayload.chapters
-                    )
-                }
-                break
-            }
-
-            // DOM / Sniffed completion: wait until page count settles for 2 consecutive ticks
-            if (count >= 3) {
+            // Completion condition 1: Structured API or __next_f delivered pages AND we either reached
+            // the bottom of the chapter or swept at least 70% with no new pages arriving for 5+ ticks.
+            val isStructured = bestPayload.source == "api" || bestPayload.source == "next_f"
+            if (isStructured && count >= 2) {
                 if (count == lastCount) {
-                    stableTicks++
-                    if (stableTicks >= 2 && scrolledSteps >= 2) {
+                    stableStructuredTicks++
+                    val sweptEnough = parsed.atBottom || parsed.scrollProgressPercent >= 85 || scrolledSteps >= 12
+                    if ((parsed.atBottom && stableStructuredTicks >= 2) || (sweptEnough && stableStructuredTicks >= 5)) {
                         break
                     }
                 } else {
-                    stableTicks = 0
+                    stableStructuredTicks = 0
                 }
-            } else if (count == 0 && bestPayload.chapters.isNotEmpty() && pageFinishedOnce && tick >= 5) {
+            }
+
+            // Completion condition 2: DOM / Sniffed reader reached the bottom of the chapter and count settled
+            if (count >= 2 && parsed.atBottom && scrolledSteps >= 2) {
+                if (count == lastCount) {
+                    stableBottomTicks++
+                    if (stableBottomTicks >= 3) {
+                        break
+                    }
+                } else {
+                    stableBottomTicks = 0
+                }
+            } else if (count == 0 && bestPayload.chapters.isNotEmpty() && pageFinishedOnce && tick >= 6) {
                 // Series index page with chapter links and no direct reader pages
                 break
             }
+
             lastCount = count
         }
 

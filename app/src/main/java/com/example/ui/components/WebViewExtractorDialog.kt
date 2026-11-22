@@ -111,10 +111,42 @@ fun WebViewExtractorDialog(
     LaunchedEffect(isAutoScrolling) {
         while (isAutoScrolling) {
             webViewRef?.evaluateJavascript(
-                "(function(){ window.scrollBy({top: Math.max(window.innerHeight * 1.4, 900), behavior: 'smooth'}); })();",
-                null
-            )
-            delay(750L)
+                """
+                (function(){
+                  if (typeof window.__PANELPULL_COLLECT_DOM === 'function') {
+                    window.__PANELPULL_COLLECT_DOM();
+                  }
+                  var docEl = document.documentElement || document.body;
+                  var scrollH = Math.max((docEl && docEl.scrollHeight) || 0, (document.body && document.body.scrollHeight) || 0);
+                  var winH = window.innerHeight || 844;
+                  var curY = window.scrollY || window.pageYOffset || 0;
+                  window.scrollBy({top: Math.max(winH * 1.5, 1100), behavior: 'smooth'});
+                  var domCount = window.__PANELPULL_DOM_MAP ? Object.keys(window.__PANELPULL_DOM_MAP).length : 0;
+                  var apiCount = Array.isArray(window.__PANELPULL_API_IMAGES) ? window.__PANELPULL_API_IMAGES.length : 0;
+                  var atBottom = (curY + winH >= scrollH - 80);
+                  return JSON.stringify({ count: Math.max(domCount, apiCount), atBottom: atBottom });
+                })();
+                """.trimIndent()
+            ) { raw ->
+                runCatching {
+                    val unquoted = if (raw != null && raw.startsWith("\"") && raw.endsWith("\"")) {
+                        org.json.JSONTokener(raw).nextValue().toString()
+                    } else {
+                        raw.orEmpty()
+                    }
+                    if (unquoted.startsWith("{")) {
+                        val obj = org.json.JSONObject(unquoted)
+                        val jsCount = obj.optInt("count", 0)
+                        if (jsCount > sniffedCount) {
+                            sniffedCount = jsCount
+                        }
+                        if (obj.optBoolean("atBottom", false)) {
+                            isAutoScrolling = false
+                        }
+                    }
+                }
+            }
+            delay(700L)
         }
     }
 

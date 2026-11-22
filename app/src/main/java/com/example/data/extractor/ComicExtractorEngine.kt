@@ -278,7 +278,10 @@ class ComicExtractorEngine(
                                     .ifBlank { item.optString("src") }
                                     .ifBlank { item.optString("image") }
                                     .ifBlank { item.optString("image_url") }
+                                    .ifBlank { item.optString("imageUrl") }
                                     .ifBlank { item.optString("file") }
+                                    .ifBlank { item.optString("original") }
+                                    .ifBlank { item.optString("path") }
                                 w = item.optInt("width", item.optInt("w", 0))
                                 h = item.optInt("height", item.optInt("h", 0))
                             }
@@ -375,7 +378,7 @@ class ComicExtractorEngine(
         var depth = 0
         var inString = false
         var escaped = false
-        val maxEnd = (openBracketIndex + 250_000).coerceAtMost(text.length)
+        val maxEnd = (openBracketIndex + 2_000_000).coerceAtMost(text.length)
         for (i in openBracketIndex until maxEnd) {
             val ch = text[i]
             if (escaped) {
@@ -481,14 +484,7 @@ class ComicExtractorEngine(
         val lower = url.lowercase()
         if (lower.startsWith("data:") || lower.endsWith(".svg") || lower.contains(".svg?")) return false
         if (lower.endsWith(".ico") || lower.contains(".ico?")) return false
-        if (lower.contains("1x1") || lower.contains("pixel") || lower.contains("tracking")) return false
-        val noiseUrls = listOf(
-            "favicon", "logo", "avatar", "discord", "patreon", "ko-fi",
-            "gravatar", "ads.", "/ads/", "doubleclick", "googlesyndication",
-            "spinner", "loading.gif", "placeholder", "badge", "emoji",
-            "apple-touch-icon", "og-image", "twitter-card"
-        )
-        if (noiseUrls.any { lower.contains(it) }) return false
+        if (NOISE_URL_BOUNDARY_REGEX.containsMatchIn(lower)) return false
         return true
     }
 
@@ -584,6 +580,11 @@ class ComicExtractorEngine(
     }
 
     companion object {
+        private val NOISE_URL_BOUNDARY_REGEX = Regex(
+            """(?:^|[/:._-])(favicon|logo|avatar|avatars|discord|patreon|ko-fi|gravatar|ads|doubleclick|googlesyndication|spinner|loading|placeholder|blank|badge|emoji|apple-touch-icon|og-image|twitter-card|1x1|tracking)(?:[/:._?-]|$)""",
+            RegexOption.IGNORE_CASE
+        )
+
         const val BROWSER_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
