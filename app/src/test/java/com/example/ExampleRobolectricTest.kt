@@ -240,4 +240,20 @@ class ExampleRobolectricTest {
         assertEquals(2, payload.images.size)
         assertEquals(1, payload.chapters.size)
     }
+
+    @Test
+    fun `comic image loader detects real formats from magic bytes and rejects html responses`() {
+        val pngHeader = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0)
+        val jpgHeader = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 0, 0, 0, 0, 0, 0, 0, 0)
+        val webpHeader = "RIFF1234WEBP".toByteArray(Charsets.US_ASCII)
+        val avifHeader = byteArrayOf(0, 0, 0, 0x1C) + "ftypavif".toByteArray(Charsets.US_ASCII)
+        val htmlBytes = "<!DOCTYPE html><html><body>403 Forbidden</body></html>".toByteArray(Charsets.UTF_8)
+
+        assertEquals("png" to "image/png", com.example.data.extractor.ComicImageLoader.detectFormatFromBytes(pngHeader))
+        assertEquals("jpg" to "image/jpeg", com.example.data.extractor.ComicImageLoader.detectFormatFromBytes(jpgHeader))
+        assertEquals("webp" to "image/webp", com.example.data.extractor.ComicImageLoader.detectFormatFromBytes(webpHeader))
+        assertEquals("avif" to "image/avif", com.example.data.extractor.ComicImageLoader.detectFormatFromBytes(avifHeader))
+        assertTrue(com.example.data.extractor.ComicImageLoader.looksLikeHtmlNotImage(htmlBytes))
+        assertTrue(!com.example.data.extractor.ComicImageLoader.looksLikeHtmlNotImage(pngHeader + ByteArray(16)))
+    }
 }

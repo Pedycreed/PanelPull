@@ -44,6 +44,8 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewDay
+import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,6 +58,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -67,6 +70,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -86,10 +90,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import coil.compose.SubcomposeAsyncImage
 import com.example.R
-import com.example.data.extractor.ComicExtractorEngine
+import com.example.data.extractor.ComicImageLoader
 import com.example.data.extractor.DownloadProgress
 import com.example.data.local.ChapterEntity
 import com.example.data.local.PageEntity
@@ -911,20 +914,17 @@ private fun ExtractedPageCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() }
-    val imageRequest = remember(page.imageUrl, localFile?.absolutePath) {
-        ImageRequest.Builder(context)
-            .data(localFile ?: page.imageUrl)
-            .addHeader("Referer", page.refererUrl)
-            .addHeader("Origin", com.example.data.extractor.WebSessionCookieStore.originOf(page.refererUrl))
-            .addHeader("User-Agent", ComicExtractorEngine.BROWSER_USER_AGENT)
-            .apply {
-                com.example.data.extractor.WebSessionCookieStore.getCookieForUrl(page.imageUrl)?.let { cookie ->
-                    addHeader("Cookie", cookie)
-                }
-            }
-            .crossfade(true)
-            .build()
+    val imageLoader = remember(context) { ComicImageLoader.getImageLoader(context) }
+    var retryKey by remember(page.imageUrl) { mutableIntStateOf(0) }
+    val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0L }
+    val imageRequest = remember(page.imageUrl, localFile?.absolutePath, retryKey) {
+        ComicImageLoader.buildImageRequest(
+            context = context,
+            localFile = localFile,
+            imageUrl = page.imageUrl,
+            refererUrl = page.refererUrl,
+            retryKey = retryKey
+        )
     }
 
     Card(
@@ -944,11 +944,76 @@ private fun ExtractedPageCard(
                     .background(MaterialTheme.colorScheme.surfaceContainerLowest)
                     .clickable(onClick = onOpenReader)
             ) {
-                AsyncImage(
+                SubcomposeAsyncImage(
                     model = imageRequest,
+                    imageLoader = imageLoader,
                     contentDescription = "Página extraída ${page.pageIndex + 1}",
                     contentScale = if (isCompact) ContentScale.Crop else ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    loading = {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                                Text(
+                                    text = "Carregando…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    error = {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable { retryKey++ }
+                                .padding(12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.BrokenImage,
+                                    contentDescription = "Falha ao carregar imagem",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Text(
+                                    text = "Falha na imagem",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                FilledTonalButton(
+                                    onClick = { retryKey++ },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        text = "Recarregar",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
                 )
 
                 Surface(
@@ -999,29 +1064,48 @@ private fun ExtractedPageCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .padding(horizontal = 6.dp, vertical = 8.dp),
+                horizontalArrangement = if (isCompact) Arrangement.SpaceEvenly else Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
-                    onClick = onCopyPage,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("copy_page_${page.pageIndex}")
-                ) {
-                    Icon(
-                        Icons.Default.ContentCopy,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(R.string.action_copy_page),
-                        maxLines = 1,
-                        style = MaterialTheme.typography.labelLarge
-                    )
+                if (isCompact) {
+                    FilledTonalIconButton(
+                        onClick = onCopyPage,
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("copy_page_${page.pageIndex}")
+                    ) {
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = "Copiar imagem da página ${page.pageIndex + 1}"
+                        )
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onCopyPage,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("copy_page_${page.pageIndex}")
+                    ) {
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.action_copy_page),
+                            maxLines = 1,
+                            softWrap = false,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
                 }
 
                 FilledTonalIconButton(

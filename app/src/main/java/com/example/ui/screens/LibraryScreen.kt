@@ -54,9 +54,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.R
-import com.example.data.extractor.ComicExtractorEngine
+import com.example.data.extractor.ComicImageLoader
 import com.example.data.local.ChapterEntity
 import com.example.data.local.ChapterWithPages
 import com.example.data.local.PageEntity
@@ -208,12 +207,18 @@ private fun SeriesArchiveCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (series.coverPathOrUrl.isNotBlank()) {
+                    val coverLoader = remember(context) { ComicImageLoader.getImageLoader(context) }
+                    val localCover = java.io.File(series.coverPathOrUrl).takeIf { it.exists() && it.length() > 0L }
+                    val coverReferer = chapters.firstOrNull()?.chapter?.sourceUrl
+                        ?: if (series.sourceHost.isNotBlank()) "https://${series.sourceHost}/" else ""
                     AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(series.coverPathOrUrl)
-                            .addHeader("User-Agent", ComicExtractorEngine.BROWSER_USER_AGENT)
-                            .crossfade(true)
-                            .build(),
+                        model = ComicImageLoader.buildImageRequest(
+                            context = context,
+                            localFile = localCover,
+                            imageUrl = series.coverPathOrUrl,
+                            refererUrl = coverReferer
+                        ),
+                        imageLoader = coverLoader,
                         contentDescription = "Capa de ${series.title}",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier

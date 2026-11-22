@@ -27,9 +27,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,9 +60,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.example.data.extractor.ComicExtractorEngine
+import coil.compose.SubcomposeAsyncImage
+import com.example.data.extractor.ComicImageLoader
 import com.example.data.local.ChapterWithPages
 import com.example.data.local.PageEntity
 import java.io.File
@@ -220,30 +223,68 @@ fun PageReaderDialog(
                 verticalArrangement = Arrangement.spacedBy(if (webtoonSeamless) 0.dp else 12.dp)
             ) {
                 itemsIndexed(pages, key = { _, page -> page.id }) { _, page ->
-                    val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() }
-                    val request = ImageRequest.Builder(context)
-                        .data(localFile ?: page.imageUrl)
-                        .addHeader("Referer", page.refererUrl)
-                        .addHeader("Origin", com.example.data.extractor.WebSessionCookieStore.originOf(page.refererUrl))
-                        .addHeader("User-Agent", ComicExtractorEngine.BROWSER_USER_AGENT)
-                        .apply {
-                            com.example.data.extractor.WebSessionCookieStore.getCookieForUrl(page.imageUrl)?.let { cookie ->
-                                addHeader("Cookie", cookie)
-                            }
-                        }
-                        .crossfade(true)
-                        .build()
+                    val imageLoader = remember(context) { ComicImageLoader.getImageLoader(context) }
+                    var retryKey by remember(page.imageUrl) { mutableIntStateOf(0) }
+                    val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0L }
+                    val request = remember(page.imageUrl, localFile?.absolutePath, retryKey) {
+                        ComicImageLoader.buildImageRequest(
+                            context = context,
+                            localFile = localFile,
+                            imageUrl = page.imageUrl,
+                            refererUrl = page.refererUrl,
+                            retryKey = retryKey
+                        )
+                    }
 
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(Color(0xFF0D0C14))
                     ) {
-                        AsyncImage(
+                        SubcomposeAsyncImage(
                             model = request,
+                            imageLoader = imageLoader,
                             contentDescription = "Página ${page.pageIndex + 1}",
                             contentScale = ContentScale.FillWidth,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            loading = {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(360.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        strokeWidth = 2.5.dp,
+                                        modifier = Modifier.size(30.dp)
+                                    )
+                                }
+                            },
+                            error = {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(260.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Falha ao carregar página ${page.pageIndex + 1}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = Color(0xFFB8B3CC)
+                                        )
+                                        FilledTonalButton(onClick = { retryKey++ }) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null)
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("Recarregar página")
+                                        }
+                                    }
+                                }
+                            }
                         )
                         if (!webtoonSeamless) {
                             Surface(

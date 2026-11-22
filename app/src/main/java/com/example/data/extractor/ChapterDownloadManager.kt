@@ -13,9 +13,9 @@ import com.example.data.local.PageEntity
 import com.example.data.model.DownloadStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -138,57 +138,60 @@ class ChapterDownloadManager(
         saveToGalleryPictures: Boolean,
         minWidthPx: Int
     ): Boolean {
-        val requestBuilder = Request.Builder()
-            .url(page.imageUrl)
-            .header("User-Agent", ComicExtractorEngine.BROWSER_USER_AGENT)
-            .header("Referer", page.refererUrl)
-            .header("Origin", WebSessionCookieStore.originOf(page.refererUrl))
-            .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
-        WebSessionCookieStore.getCookieForUrl(page.imageUrl)?.let { cookie ->
-            requestBuilder.header("Cookie", cookie)
+        val fetched = ComicImageLoader.fetchImageBytes(
+            context = context,
+            imageUrl = page.imageUrl,
+            refererUrl = page.refererUrl
+        ) ?: return false
+
+        val bytes = fetched.bytes
+        if (bytes.size < 1024 || ComicImageLoader.looksLikeHtmlNotImage(bytes)) return false
+
+        if (!fetched.fromCache) {
+            delay(120L)
         }
 
-        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
-            if (!response.isSuccessful) return false
-            val bytes = response.body?.bytes() ?: return false
-            if (bytes.size < 2048) return false
+        val contentType = fetched.contentType.orEmpty().lowercase()
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 
-            val contentType = response.header("Content-Type").orEmpty().lowercase()
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-            val isAvif = contentType.contains("avif") || page.imageUrl.contains(".avif", ignoreCase = true)
-            if ((options.outWidth <= 0 || options.outHeight <= 0) && !isAvif) return false
-            if (minWidthPx > 0 && options.outWidth > 0 && options.outHeight > 0 &&
-                options.outWidth < minWidthPx && options.outHeight < minWidthPx
-            ) {
-                return false
-            }
+        val (detectedExt, detectedMime) = ComicImageLoader.detectFormatFromBytes(bytes, page.imageUrl)
+        val isAvif = detectedExt == "avif" || contentType.contains("avif") || page.imageUrl.contains(".avif", ignoreCase = true)
+        if ((options.outWidth <= 0 || options.outHeight <= 0) && !isAvif) return false
+        if (minWidthPx > 0 && options.outWidth > 0 && options.outHeight > 0 &&
+            options.outWidth < minWidthPx && options.outHeight < minWidthPx
+        ) {
+            return false
+        }
 
-            val (ext, mimeType) = resolveExtensionAndMime(page.imageUrl, contentType, options.outMimeType)
-            val fileName = "${(page.pageIndex + 1).toString().padStart(3, '0')}.$ext"
-            val targetFile = File(chapterDir, fileName)
-            targetFile.writeBytes(bytes)
+        val (ext, mimeType) = if (detectedExt.isNotBlank()) {
+            detectedExt to detectedMime
+        } else {
+            resolveExtensionAndMime(page.imageUrl, contentType, options.outMimeType)
+        }
+        val fileName = "${(page.pageIndex + 1).toString().padStart(3, '0')}.$ext"
+        val targetFile = File(chapterDir, fileName)
+        targetFile.writeBytes(bytes)
 
-            if (saveToGalleryPictures && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                mirrorToPicturesMediaStore(
-                    bytes = bytes,
-                    displayName = fileName,
-                    mimeType = mimeType,
-                    relativePath = "${Environment.DIRECTORY_PICTURES}/PanelPull/$seriesFolder/$chapterFolder"
-                )
-            }
-
-            repository.updatePageDownload(
-                pageId = page.id,
-                path = targetFile.absolutePath,
+        if (saveToGalleryPictures && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            mirrorToPicturesMediaStore(
+                bytes = bytes,
+                displayName = fileName,
                 mimeType = mimeType,
-                width = options.outWidth,
-                height = options.outHeight,
-                bytes = targetFile.length(),
-                downloaded = true
+                relativePath = "${Environment.DIRECTORY_PICTURES}/PanelPull/$seriesFolder/$chapterFolder"
             )
-            return true
         }
+
+        repository.updatePageDownload(
+            pageId = page.id,
+            path = targetFile.absolutePath,
+            mimeType = mimeType,
+            width = options.outWidth,
+            height = options.outHeight,
+            bytes = targetFile.length(),
+            downloaded = true
+        )
+        return true
     }
 
     private fun mirrorToPicturesMediaStore(

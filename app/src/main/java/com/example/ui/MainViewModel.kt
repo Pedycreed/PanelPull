@@ -498,13 +498,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun copyPageImage(page: PageEntity) {
         viewModelScope.launch {
-            val ok = pageActionsHelper.copyPageImageToClipboard(page)
-            if (ok) {
+            val result = pageActionsHelper.copyPageImageToClipboard(page)
+            if (result.success) {
                 libraryRepository.markPageCopied(page.id)
                 refreshCurrentExtractionIfMatches(page.chapterId)
                 _snackbarEvents.tryEmit("Página ${page.pageIndex + 1} copiada para a área de transferência!")
             } else {
-                _snackbarEvents.tryEmit("Erro ao copiar imagem da página ${page.pageIndex + 1}.")
+                val detail = result.errorDetail?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                _snackbarEvents.tryEmit("Erro ao copiar página ${page.pageIndex + 1}$detail")
             }
         }
     }
