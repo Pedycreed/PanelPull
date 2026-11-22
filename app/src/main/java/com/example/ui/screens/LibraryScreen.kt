@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -68,6 +69,8 @@ fun LibraryScreen(
     library: List<SeriesWithChapters>,
     onOpenReader: (chapterId: Long) -> Unit,
     onDownloadChapter: (chapterId: Long, seriesTitle: String) -> Unit,
+    onSmartStitchChapter: (ChapterWithPages, seriesTitle: String, comicFormat: String) -> Unit,
+    onSmartStitchGallery: () -> Unit,
     onExportCbz: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit,
     onDeleteChapter: (ChapterEntity) -> Unit,
     onDeleteSeries: (SeriesEntity) -> Unit,
@@ -98,16 +101,37 @@ fun LibraryScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "Biblioteca Organizada",
-                        style = MaterialTheme.typography.headlineMedium
-                    )
-                    Text(
-                        text = "Capítulos agrupados automaticamente por Obra / Capítulo",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Biblioteca Organizada",
+                            style = MaterialTheme.typography.headlineMedium
+                        )
+                        Text(
+                            text = "Capítulos agrupados automaticamente por Obra / Capítulo",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    FilledTonalButton(
+                        onClick = onSmartStitchGallery,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier
+                            .height(44.dp)
+                            .testTag("library_smartstitch_gallery_button")
+                    ) {
+                        Icon(Icons.Default.ViewAgenda, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Stitch", maxLines = 1)
+                    }
                 }
             }
 
@@ -163,6 +187,9 @@ fun LibraryScreen(
                         onDownloadChapter = { chId ->
                             onDownloadChapter(chId, seriesItem.series.title)
                         },
+                        onSmartStitchChapter = { chWithPages ->
+                            onSmartStitchChapter(chWithPages, seriesItem.series.title, seriesItem.series.comicFormat)
+                        },
                         onRequestCbzExport = { chLabel, pages ->
                             val cleanName = "${seriesItem.series.slug}_${chLabel.replace(" ", "_")}.cbz"
                             pendingExportChapter = "${seriesItem.series.title} • $chLabel" to pages
@@ -182,6 +209,7 @@ private fun SeriesArchiveCard(
     seriesWithChapters: SeriesWithChapters,
     onOpenReader: (Long) -> Unit,
     onDownloadChapter: (Long) -> Unit,
+    onSmartStitchChapter: (ChapterWithPages) -> Unit,
     onRequestCbzExport: (chapterLabel: String, pages: List<PageEntity>) -> Unit,
     onDeleteChapter: (ChapterEntity) -> Unit,
     onDeleteSeries: () -> Unit
@@ -287,6 +315,7 @@ private fun SeriesArchiveCard(
                     chapterWithPages = chWithPages,
                     onOpenReader = { onOpenReader(chWithPages.chapter.id) },
                     onDownload = { onDownloadChapter(chWithPages.chapter.id) },
+                    onSmartStitch = { onSmartStitchChapter(chWithPages) },
                     onExportCbz = {
                         onRequestCbzExport(chWithPages.chapter.chapterLabel, chWithPages.pages)
                     },
@@ -302,6 +331,7 @@ private fun ChapterArchiveRow(
     chapterWithPages: ChapterWithPages,
     onOpenReader: () -> Unit,
     onDownload: () -> Unit,
+    onSmartStitch: () -> Unit,
     onExportCbz: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -383,6 +413,18 @@ private fun ChapterArchiveRow(
                         Text("Export .CBZ", maxLines = 1)
                     }
                 }
+            }
+
+            OutlinedButton(
+                onClick = onSmartStitch,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("library_smartstitch_chapter_${ch.id}")
+            ) {
+                Icon(Icons.Default.ViewAgenda, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Juntar Páginas (SmartStitch)", maxLines = 1)
             }
         }
     }

@@ -47,6 +47,7 @@ import com.example.R
 import com.example.ui.components.HeadlessWebViewExtractor
 import com.example.ui.components.InstallAppSheet
 import com.example.ui.components.PageReaderDialog
+import com.example.ui.components.SmartStitchDialog
 import com.example.ui.components.WebViewExtractorDialog
 import com.example.ui.screens.AiAnalyzerScreen
 import com.example.ui.screens.CoverStudioScreen
@@ -121,6 +122,8 @@ fun PanelPullApp(
     val readerInitialPage by viewModel.readerInitialPage.collectAsStateWithLifecycle()
     val isExportingApk by viewModel.isExportingApk.collectAsStateWithLifecycle()
     val headlessExtractUrl by viewModel.headlessExtractUrl.collectAsStateWithLifecycle()
+    val smartStitchTarget by viewModel.smartStitchTarget.collectAsStateWithLifecycle()
+    val smartStitchState by viewModel.smartStitchState.collectAsStateWithLifecycle()
 
     var showWebViewExtractor by remember { mutableStateOf(false) }
     var showInstallAppSheet by remember { mutableStateOf(false) }
@@ -161,7 +164,7 @@ fun PanelPullApp(
                 contentWindowInsets = WindowInsets.safeDrawing,
                 snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                 bottomBar = {
-                    if (!useNavigationRail && readerChapterId == null && !showWebViewExtractor) {
+                    if (!useNavigationRail && readerChapterId == null && !showWebViewExtractor && smartStitchTarget == null) {
                         NavigationBar {
                             navTabs.forEach { tab ->
                                 val selected = currentRoute == tab.route
@@ -188,7 +191,7 @@ fun PanelPullApp(
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    if (useNavigationRail && readerChapterId == null && !showWebViewExtractor) {
+                    if (useNavigationRail && readerChapterId == null && !showWebViewExtractor && smartStitchTarget == null) {
                         NavigationRail {
                             navTabs.forEach { tab ->
                                 val selected = currentRoute == tab.route
@@ -244,7 +247,13 @@ fun PanelPullApp(
                                     navigateToTab(ROUTE_AI_ANALYZER)
                                 },
                                 onOpenReader = viewModel::openReader,
-                                onOpenInstallAppSheet = { showInstallAppSheet = true }
+                                onOpenInstallAppSheet = { showInstallAppSheet = true },
+                                onOpenSmartStitchChapter = { chWithPages, title, fmt ->
+                                    viewModel.openSmartStitchForChapter(chWithPages, title, fmt)
+                                },
+                                onOpenSmartStitchGallery = {
+                                    viewModel.openSmartStitchForGallery(emptyList())
+                                }
                             )
                         }
 
@@ -253,6 +262,12 @@ fun PanelPullApp(
                                 library = library,
                                 onOpenReader = { chId -> viewModel.openReader(chId, 0) },
                                 onDownloadChapter = viewModel::downloadChapter,
+                                onSmartStitchChapter = { chWithPages, title, fmt ->
+                                    viewModel.openSmartStitchForChapter(chWithPages, title, fmt)
+                                },
+                                onSmartStitchGallery = {
+                                    viewModel.openSmartStitchForGallery(emptyList())
+                                },
                                 onExportCbz = viewModel::exportChapterAsCbz,
                                 onDeleteChapter = viewModel::deleteChapter,
                                 onDeleteSeries = viewModel::deleteSeries,
@@ -366,6 +381,27 @@ fun PanelPullApp(
                         viewModel.shareAppApk()
                         showInstallAppSheet = false
                     }
+                )
+            }
+
+            // SmartStitch Overlay (Join & Smart-Slice Pages)
+            val activeStitchTarget = smartStitchTarget
+            if (activeStitchTarget != null) {
+                SmartStitchDialog(
+                    target = activeStitchTarget,
+                    stitchState = smartStitchState,
+                    defaultSaveToGallery = preferences.saveToGalleryPictures,
+                    onDismiss = viewModel::closeSmartStitch,
+                    onSelectGalleryUris = viewModel::openSmartStitchForGallery,
+                    onRunStitch = viewModel::runSmartStitch,
+                    onCancelStitch = viewModel::cancelSmartStitch,
+                    onOpenStitchedReader = { chId, pageIdx ->
+                        viewModel.closeSmartStitch()
+                        viewModel.openReader(chId, pageIdx)
+                    },
+                    onCopyStitchedPage = viewModel::copyPageImage,
+                    onShareStitchedPage = viewModel::sharePage,
+                    onExportStitchedCbz = viewModel::exportChapterAsCbz
                 )
             }
         }

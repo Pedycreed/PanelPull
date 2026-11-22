@@ -256,4 +256,127 @@ class ExampleRobolectricTest {
         assertTrue(com.example.data.extractor.ComicImageLoader.looksLikeHtmlNotImage(htmlBytes))
         assertTrue(!com.example.data.extractor.ComicImageLoader.looksLikeHtmlNotImage(pngHeader + ByteArray(16)))
     }
+
+    @Test
+    fun `smart stitch pixel detector identifies uniform gutters and ignores edge margins`() {
+        val uniformWhite = IntArray(200) { android.graphics.Color.WHITE }
+        val uniformDark = IntArray(200) { android.graphics.Color.rgb(20, 20, 24) }
+        val rowWithBubble = IntArray(200) { android.graphics.Color.WHITE }.apply {
+            this[100] = android.graphics.Color.BLACK
+        }
+        val rowWithEdgeBorderOnly = IntArray(200) { android.graphics.Color.WHITE }.apply {
+            this[0] = android.graphics.Color.BLACK
+            this[2] = android.graphics.Color.BLACK
+            this[199] = android.graphics.Color.BLACK
+        }
+
+        assertTrue(com.example.data.stitch.SmartStitchEngine.isRowSafeForCut(uniformWhite, ignorablePixels = 5, sensitivity = 90))
+        assertTrue(com.example.data.stitch.SmartStitchEngine.isRowSafeForCut(uniformDark, ignorablePixels = 5, sensitivity = 90))
+        assertTrue(!com.example.data.stitch.SmartStitchEngine.isRowSafeForCut(rowWithBubble, ignorablePixels = 5, sensitivity = 90))
+        assertTrue(com.example.data.stitch.SmartStitchEngine.isRowSafeForCut(rowWithEdgeBorderOnly, ignorablePixels = 5, sensitivity = 90))
+        assertTrue(com.example.data.stitch.SmartStitchEngine.isRowSafeForCut(rowWithBubble, ignorablePixels = 5, sensitivity = 0))
+    }
+
+    @Test
+    fun `smart stitch avoids slicing through speech bubbles by shifting to nearest clean gutter`() {
+        val cleanRow = IntArray(100) { android.graphics.Color.WHITE }
+        val bubbleRow = IntArray(100) { android.graphics.Color.WHITE }.apply {
+            this[50] = android.graphics.Color.BLACK
+        }
+
+        // Simulate artwork/bubble spanning rows 950..1080 around idealY = 1000
+        val cutY = com.example.data.stitch.SmartStitchEngine.findSmartCutY(
+            startY = 0,
+            targetHeight = 1000,
+            totalHeight = 2500,
+            sensitivity = 90,
+            ignorablePixels = 5,
+            scanStep = 5,
+            readRow = { y -> if (y in 950..1080) bubbleRow else cleanRow }
+        )
+
+        assertTrue("Expected smart cut outside bubble zone [950..1080], got $cutY", cutY < 950 || cutY > 1080)
+        assertEquals(945, cutY)
+    }
+
+    @Test
+    fun `smart stitch stitches bitmaps of different widths with automatic width enforcement`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = com.example.data.stitch.SmartStitchEngine(context)
+
+        val tempRoot = java.io.File(context.cacheDir, "smartstitch_test_${System.currentTimeMillis()}").apply { mkdirs() }
+        val input1 = java.io.File(tempRoot, "001.png")
+        val input2 = java.io.File(tempRoot, "002.png")
+        val outSmartDir = java.io.File(tempRoot, "out_smart")
+        val outStripDir = java.io.File(tempRoot, "out_strip")
+
+        try {
+            // Page 1: 400x700 white canvas with a dark panel band in the middle
+            val bmp1 = android.graphics.Bitmap.createBitmap(400, 700, android.graphics.Bitmap.Config.ARGB_8888)
+            android.graphics.Canvas(bmp1).apply {
+                drawColor(android.graphics.Color.WHITE)
+                val paint = android.graphics.Paint().apply { color = android.graphics.Color.DKGRAY }
+                drawRect(40f, 100f, 360f, 550f, paint)
+            }
+            java.io.FileOutputStream(input1).use { bmp1.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bmp1.recycle()
+
+            // Page 2: 600x900 (scales to 400x600 under AUTOMATIC width enforcement -> total height = 1300)
+            val bmp2 = android.graphics.Bitmap.createBitmap(600, 900, android.graphics.Bitmap.Config.ARGB_8888)
+            android.graphics.Canvas(bmp2).apply {
+                drawColor(android.graphics.Color.WHITE)
+                val paint = android.graphics.Paint().apply { color = android.graphics.Color.BLUE }
+                drawRect(60f, 200f, 540f, 700f, paint)
+            }
+            java.io.FileOutputStream(input2).use { bmp2.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bmp2.recycle()
+
+            val smartResult = kotlinx.coroutines.runBlocking {
+                engine.stitchFiles(
+                    inputFiles = listOf(input1, input2),
+                    outputDir = outSmartDir,
+                    galleryRelativePath = null,
+                    config = com.example.data.stitch.SmartStitchConfig(
+                        detectorMode = com.example.data.stitch.StitchDetectorMode.SMART_PIXEL,
+                        splitHeight = 1000,
+                        sensitivity = 90,
+                        ignorablePixels = 5,
+                        scanStep = 5,
+                        widthEnforcement = com.example.data.stitch.WidthEnforcementMode.AUTOMATIC,
+                        outputFormat = com.example.data.stitch.StitchOutputFormat.PNG,
+                        saveToGallery = false
+                    ),
+                    onProgress = {}
+                )
+            }
+
+            assertEquals(2, smartResult.inputPageCount)
+            assertEquals(400, smartResult.targetWidth)
+            assertTrue("Expected at least 2 slices for 1300px height with 1000px split", smartResult.outputFiles.size >= 2)
+            assertEquals(1300, smartResult.outputFiles.sumOf { it.height })
+            assertTrue(smartResult.outputFiles.all { it.file.exists() && it.file.length() > 0L && it.width == 400 })
+
+            val stripResult = kotlinx.coroutines.runBlocking {
+                engine.stitchFiles(
+                    inputFiles = listOf(input1, input2),
+                    outputDir = outStripDir,
+                    galleryRelativePath = null,
+                    config = com.example.data.stitch.SmartStitchConfig(
+                        detectorMode = com.example.data.stitch.StitchDetectorMode.SINGLE_STRIP,
+                        widthEnforcement = com.example.data.stitch.WidthEnforcementMode.AUTOMATIC,
+                        outputFormat = com.example.data.stitch.StitchOutputFormat.PNG,
+                        saveToGallery = false
+                    ),
+                    onProgress = {}
+                )
+            }
+
+            assertEquals(1, stripResult.outputFiles.size)
+            assertEquals(400, stripResult.outputFiles[0].width)
+            assertEquals(1300, stripResult.outputFiles[0].height)
+            assertTrue(stripResult.outputFiles[0].file.exists() && stripResult.outputFiles[0].file.length() > 0L)
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
 }

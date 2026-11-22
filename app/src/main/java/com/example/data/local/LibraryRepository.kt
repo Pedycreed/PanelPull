@@ -94,6 +94,101 @@ class LibraryRepository(
         return ChapterWithPages(storedChapter, storedPages)
     }
 
+    suspend fun saveStitchedChapterToLibrary(
+        seriesTitle: String,
+        chapterNumber: String,
+        chapterLabel: String,
+        comicFormat: String,
+        sourceHost: String,
+        sourceUrlKey: String,
+        outputDir: File,
+        stitchedFiles: List<com.example.data.stitch.StitchedOutputFile>
+    ): ChapterWithPages {
+        val seriesSlug = sanitizeFileSegment(seriesTitle).ifBlank { "obra" }
+        val seriesDir = File(baseChaptersDir, seriesSlug).apply { mkdirs() }
+
+        val existingSeries = dao.getSeriesBySlug(seriesSlug)
+        val seriesId = if (existingSeries != null) {
+            dao.updateSeries(
+                existingSeries.copy(
+                    title = seriesTitle,
+                    coverPathOrUrl = existingSeries.coverPathOrUrl.ifBlank {
+                        stitchedFiles.firstOrNull()?.file?.absolutePath.orEmpty()
+                    },
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            existingSeries.id
+        } else {
+            dao.insertSeries(
+                SeriesEntity(
+                    title = seriesTitle,
+                    slug = seriesSlug,
+                    sourceHost = sourceHost,
+                    comicFormat = comicFormat,
+                    coverPathOrUrl = stitchedFiles.firstOrNull()?.file?.absolutePath.orEmpty(),
+                    folderPath = seriesDir.absolutePath
+                )
+            )
+        }
+
+        val existingChapter = dao.getChapterBySourceUrl(sourceUrlKey)
+        val chapterId = if (existingChapter != null) {
+            dao.deletePagesForChapter(existingChapter.id)
+            dao.updateChapter(
+                existingChapter.copy(
+                    seriesId = seriesId,
+                    chapterNumber = chapterNumber,
+                    chapterLabel = chapterLabel,
+                    folderPath = outputDir.absolutePath,
+                    pageCount = stitchedFiles.size,
+                    downloadedCount = stitchedFiles.size,
+                    status = DownloadStatus.COMPLETED.name
+                )
+            )
+            existingChapter.id
+        } else {
+            dao.insertChapter(
+                ChapterEntity(
+                    seriesId = seriesId,
+                    chapterNumber = chapterNumber,
+                    chapterLabel = chapterLabel,
+                    sourceUrl = sourceUrlKey,
+                    folderPath = outputDir.absolutePath,
+                    pageCount = stitchedFiles.size,
+                    downloadedCount = stitchedFiles.size,
+                    status = DownloadStatus.COMPLETED.name
+                )
+            )
+        }
+
+        val pageEntities = stitchedFiles.mapIndexed { idx, stitched ->
+            PageEntity(
+                chapterId = chapterId,
+                pageIndex = idx,
+                imageUrl = stitched.file.toURI().toString(),
+                refererUrl = "",
+                localFilePath = stitched.file.absolutePath,
+                mimeType = stitched.mimeType,
+                width = stitched.width,
+                height = stitched.height,
+                fileSizeBytes = stitched.file.length(),
+                isDownloaded = true
+            )
+        }
+        dao.insertPages(pageEntities)
+
+        val storedChapter = dao.getChapterById(chapterId)!!
+        val storedPages = dao.getPagesForChapter(chapterId)
+        return ChapterWithPages(storedChapter, storedPages)
+    }
+
+    fun getStitchedChapterDir(seriesTitle: String, chapterNumber: String, chapterLabel: String): File {
+        val seriesSlug = sanitizeFileSegment(seriesTitle).ifBlank { "obra" }
+        val chapterSlug = buildChapterFolderName(chapterNumber, chapterLabel)
+        return File(File(baseChaptersDir, seriesSlug), "${chapterSlug}_SmartStitch").apply { mkdirs() }
+    }
+
     suspend fun getPagesForChapter(chapterId: Long): List<PageEntity> =
         dao.getPagesForChapter(chapterId)
 

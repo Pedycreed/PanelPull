@@ -23,10 +23,14 @@ import com.example.data.model.ExtractionResult
 import com.example.data.model.StudioAspectRatio
 import com.example.data.prefs.UserPreferences
 import com.example.data.prefs.UserPreferencesRepository
+import com.example.data.stitch.SmartStitchConfig
+import com.example.data.stitch.SmartStitchEngine
+import com.example.data.stitch.StitchProgress
 import com.example.data.util.ApkExportHelper
 import com.example.data.util.InstalledApkInfo
 import com.example.data.util.PageActionsHelper
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -37,6 +41,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private const val TAG = "PanelPullViewModel"
@@ -97,6 +102,30 @@ data class BatchDownloadStatus(
     val currentChapterTitle: String
 )
 
+sealed interface SmartStitchTarget {
+    data class Chapter(
+        val chapterWithPages: ChapterWithPages,
+        val seriesTitle: String,
+        val comicFormat: String
+    ) : SmartStitchTarget
+
+    data class GalleryImages(
+        val uris: List<Uri>
+    ) : SmartStitchTarget
+}
+
+sealed interface SmartStitchUiState {
+    data object Idle : SmartStitchUiState
+    data class Running(val progress: StitchProgress) : SmartStitchUiState
+    data class Success(
+        val chapterWithPages: ChapterWithPages,
+        val seriesTitle: String,
+        val inputPageCount: Int,
+        val targetWidth: Int
+    ) : SmartStitchUiState
+    data class Error(val message: String) : SmartStitchUiState
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val extractorEngine = ComicExtractorEngine()
@@ -113,6 +142,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val prefsRepository = UserPreferencesRepository(application)
     private val pageActionsHelper = PageActionsHelper(application, extractorEngine.okHttpClient)
     private val apkExportHelper = ApkExportHelper(application)
+    private val smartStitchEngine = SmartStitchEngine(application)
     private val aiRepository = PanelAiRepository()
 
     val installedApkInfo: InstalledApkInfo
@@ -169,11 +199,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _headlessExtractUrl = MutableStateFlow<String?>(null)
     val headlessExtractUrl: StateFlow<String?> = _headlessExtractUrl.asStateFlow()
 
+    private val _smartStitchTarget = MutableStateFlow<SmartStitchTarget?>(null)
+    val smartStitchTarget: StateFlow<SmartStitchTarget?> = _smartStitchTarget.asStateFlow()
+
+    private val _smartStitchState = MutableStateFlow<SmartStitchUiState>(SmartStitchUiState.Idle)
+    val smartStitchState: StateFlow<SmartStitchUiState> = _smartStitchState.asStateFlow()
+
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
     private var activeExtractJob: Job? = null
     private var activeDownloadJob: Job? = null
+    private var activeStitchJob: Job? = null
     private var activeAiJob: Job? = null
     private var pendingFastPassFallback: ExtractionResult? = null
 
@@ -729,6 +766,181 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _snackbarEvents.tryEmit(e.localizedMessage ?: "Erro ao salvar o APK.")
             } finally {
                 _isExportingApk.value = false
+            }
+        }
+    }
+
+    fun openSmartStitchForChapter(
+        chapterWithPages: ChapterWithPages,
+        seriesTitle: String,
+        comicFormat: String
+    ) {
+        _smartStitchState.value = SmartStitchUiState.Idle
+        _smartStitchTarget.value = SmartStitchTarget.Chapter(
+            chapterWithPages = chapterWithPages,
+            seriesTitle = seriesTitle,
+            comicFormat = comicFormat
+        )
+    }
+
+    fun openSmartStitchForGallery(uris: List<Uri>) {
+        _smartStitchState.value = SmartStitchUiState.Idle
+        _smartStitchTarget.value = SmartStitchTarget.GalleryImages(uris)
+    }
+
+    fun closeSmartStitch() {
+        activeStitchJob?.cancel()
+        _smartStitchTarget.value = null
+        _smartStitchState.value = SmartStitchUiState.Idle
+    }
+
+    fun cancelSmartStitch() {
+        activeStitchJob?.cancel()
+        _smartStitchState.value = SmartStitchUiState.Idle
+        _snackbarEvents.tryEmit("SmartStitch cancelado.")
+    }
+
+    fun runSmartStitch(config: SmartStitchConfig) {
+        val target = _smartStitchTarget.value ?: return
+        activeStitchJob?.cancel()
+        activeStitchJob = viewModelScope.launch {
+            _smartStitchState.value = SmartStitchUiState.Running(
+                StitchProgress(0, 1, "Iniciando SmartStitch…")
+            )
+            try {
+                when (target) {
+                    is SmartStitchTarget.Chapter -> {
+                        val ch = target.chapterWithPages.chapter
+                        val freshPages = libraryRepository.getPagesForChapter(ch.id)
+                            .ifEmpty { target.chapterWithPages.pages }
+                        val outputDir = libraryRepository.getStitchedChapterDir(
+                            seriesTitle = target.seriesTitle,
+                            chapterNumber = ch.chapterNumber,
+                            chapterLabel = ch.chapterLabel
+                        )
+                        val seriesFolder = LibraryRepository.sanitizeFileSegment(target.seriesTitle)
+                        val chapterFolder = LibraryRepository.buildChapterFolderName(ch.chapterNumber, ch.chapterLabel)
+                        val galleryRelPath = if (config.saveToGallery) {
+                            "${android.os.Environment.DIRECTORY_PICTURES}/PanelPull/$seriesFolder/${chapterFolder}_SmartStitch"
+                        } else {
+                            null
+                        }
+
+                        val result = smartStitchEngine.stitchChapterPages(
+                            pages = freshPages,
+                            outputDir = outputDir,
+                            galleryRelativePath = galleryRelPath,
+                            config = config,
+                            onProgress = { progress ->
+                                _smartStitchState.value = SmartStitchUiState.Running(progress)
+                            }
+                        )
+
+                        val stitchedLabel = if (ch.chapterLabel.contains("SmartStitch", ignoreCase = true)) {
+                            ch.chapterLabel
+                        } else {
+                            "${ch.chapterLabel} (SmartStitch)"
+                        }
+                        val savedChapter = libraryRepository.saveStitchedChapterToLibrary(
+                            seriesTitle = target.seriesTitle,
+                            chapterNumber = ch.chapterNumber,
+                            chapterLabel = stitchedLabel,
+                            comicFormat = target.comicFormat,
+                            sourceHost = "SmartStitch",
+                            sourceUrlKey = "${ch.sourceUrl}#smartstitch",
+                            outputDir = outputDir,
+                            stitchedFiles = result.outputFiles
+                        )
+
+                        _smartStitchState.value = SmartStitchUiState.Success(
+                            chapterWithPages = savedChapter,
+                            seriesTitle = target.seriesTitle,
+                            inputPageCount = result.inputPageCount,
+                            targetWidth = result.targetWidth
+                        )
+                        _snackbarEvents.tryEmit(
+                            "SmartStitch pronto: ${result.inputPageCount} páginas → ${result.outputFiles.size} tiras!"
+                        )
+                    }
+
+                    is SmartStitchTarget.GalleryImages -> {
+                        if (target.uris.isEmpty()) {
+                            _smartStitchState.value = SmartStitchUiState.Error(
+                                "Toque em Galeria para selecionar as páginas que deseja juntar."
+                            )
+                            return@launch
+                        }
+                        val appContext = getApplication<Application>()
+                        val stamp = System.currentTimeMillis()
+                        val tempDir = File(appContext.cacheDir, "smartstitch_gallery/$stamp").apply { mkdirs() }
+                        try {
+                            val copiedFiles = withContext(Dispatchers.IO) {
+                                target.uris.mapIndexedNotNull { idx, uri ->
+                                    _smartStitchState.value = SmartStitchUiState.Running(
+                                        StitchProgress(idx + 1, target.uris.size, "Lendo imagem ${idx + 1} da galeria…")
+                                    )
+                                    val bytes = appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                        ?: return@mapIndexedNotNull null
+                                    val (ext, _) = com.example.data.extractor.ComicImageLoader.detectFormatFromBytes(bytes)
+                                    val f = File(tempDir, "${(idx + 1).toString().padStart(4, '0')}.$ext")
+                                    f.writeBytes(bytes)
+                                    f
+                                }
+                            }
+                            if (copiedFiles.isEmpty()) {
+                                _smartStitchState.value = SmartStitchUiState.Error(
+                                    "Não foi possível ler as imagens selecionadas da galeria."
+                                )
+                                return@launch
+                            }
+                            val chapterNum = (stamp % 10000).toString()
+                            val label = "SmartStitch Galeria"
+                            val outputDir = libraryRepository.getStitchedChapterDir("SmartStitch", chapterNum, label)
+                            val galleryRelPath = if (config.saveToGallery) {
+                                "${android.os.Environment.DIRECTORY_PICTURES}/PanelPull/SmartStitch/Lote_$chapterNum"
+                            } else {
+                                null
+                            }
+                            val result = smartStitchEngine.stitchFiles(
+                                inputFiles = copiedFiles,
+                                outputDir = outputDir,
+                                galleryRelativePath = galleryRelPath,
+                                config = config,
+                                onProgress = { progress ->
+                                    _smartStitchState.value = SmartStitchUiState.Running(progress)
+                                }
+                            )
+                            val savedChapter = libraryRepository.saveStitchedChapterToLibrary(
+                                seriesTitle = "SmartStitch",
+                                chapterNumber = chapterNum,
+                                chapterLabel = "$label #$chapterNum",
+                                comicFormat = "MANHWA",
+                                sourceHost = "Galeria",
+                                sourceUrlKey = "gallery://smartstitch/$stamp",
+                                outputDir = outputDir,
+                                stitchedFiles = result.outputFiles
+                            )
+                            _smartStitchState.value = SmartStitchUiState.Success(
+                                chapterWithPages = savedChapter,
+                                seriesTitle = "SmartStitch",
+                                inputPageCount = result.inputPageCount,
+                                targetWidth = result.targetWidth
+                            )
+                            _snackbarEvents.tryEmit(
+                                "SmartStitch pronto: ${result.inputPageCount} imagens → ${result.outputFiles.size} tiras!"
+                            )
+                        } finally {
+                            tempDir.deleteRecursively()
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "SmartStitch failed", e)
+                _smartStitchState.value = SmartStitchUiState.Error(
+                    e.localizedMessage ?: "Falha ao processar SmartStitch."
+                )
             }
         }
     }

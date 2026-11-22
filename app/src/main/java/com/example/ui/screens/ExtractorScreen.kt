@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewDay
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -95,6 +96,7 @@ import com.example.R
 import com.example.data.extractor.ComicImageLoader
 import com.example.data.extractor.DownloadProgress
 import com.example.data.local.ChapterEntity
+import com.example.data.local.ChapterWithPages
 import com.example.data.local.PageEntity
 import com.example.data.prefs.UserPreferences
 import com.example.ui.BatchDownloadStatus
@@ -127,6 +129,8 @@ fun ExtractorScreen(
     onAnalyzePage: (PageEntity, String) -> Unit,
     onOpenReader: (chapterId: Long, pageIndex: Int) -> Unit,
     onOpenInstallAppSheet: () -> Unit,
+    onOpenSmartStitchChapter: (ChapterWithPages, seriesTitle: String, comicFormat: String) -> Unit,
+    onOpenSmartStitchGallery: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -579,10 +583,21 @@ fun ExtractorScreen(
                                     style = MaterialTheme.typography.titleLarge
                                 )
                                 Text(
-                                    text = "Cole o link de qualquer capítulo ou obra (incluindo Comix.to, Webtoons, mangás e sites Next.js/SPA). Se o site exigir verificação ou carregamento dinâmico, use o botão Navegador JS.",
+                                    text = "Cole o link de qualquer capítulo ou obra (incluindo Comix.to, Webtoons, mangás e sites Next.js/SPA). Se o site exigir verificação ou carregamento dinâmico, use o botão Navegador.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                FilledTonalButton(
+                                    onClick = onOpenSmartStitchGallery,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("idle_smartstitch_gallery_button")
+                                ) {
+                                    Icon(Icons.Default.ViewAgenda, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("SmartStitch — Juntar Páginas da Galeria", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }
@@ -850,6 +865,24 @@ fun ExtractorScreen(
                                         Icon(Icons.Default.Download, contentDescription = null)
                                         Spacer(Modifier.width(8.dp))
                                         Text("${stringResource(R.string.action_download_chapter)} (${pages.size})")
+                                    }
+
+                                    FilledTonalButton(
+                                        onClick = {
+                                            onOpenSmartStitchChapter(
+                                                state.chapterWithPages,
+                                                state.seriesTitle,
+                                                state.comicFormatLabel
+                                            )
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp)
+                                            .testTag("extractor_smartstitch_button")
+                                    ) {
+                                        Icon(Icons.Default.ViewAgenda, contentDescription = null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Juntar Páginas (SmartStitch)", maxLines = 1)
                                     }
                                 }
                             }
