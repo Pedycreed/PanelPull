@@ -196,13 +196,17 @@ fun ExtractorScreen(
                                     }
                                     Surface(
                                         color = Color(0x991E1D2B),
-                                        shape = RoundedCornerShape(6.dp)
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.weight(1f, fill = false)
                                     ) {
                                         Text(
                                             text = "MANHWA • MANGÁ • WEBTOON",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = Color(0xFF38BDF8),
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                                         )
                                     }
                                 }
@@ -335,14 +339,20 @@ fun ExtractorScreen(
                                     keyboard?.hide()
                                     onExtractClick()
                                 },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                                 modifier = Modifier
-                                    .weight(1.4f)
+                                    .weight(1.3f)
                                     .height(48.dp)
                                     .testTag("extract_button")
                             ) {
-                                Icon(Icons.Default.Search, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.action_extract))
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.action_extract),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
 
                             FilledTonalButton(
@@ -350,14 +360,20 @@ fun ExtractorScreen(
                                     keyboard?.hide()
                                     onOpenWebViewClick()
                                 },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(48.dp)
                                     .testTag("webview_mode_button")
                             ) {
-                                Icon(Icons.Default.Language, contentDescription = null)
+                                Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.action_webview_mode), maxLines = 1)
+                                Text(
+                                    text = stringResource(R.string.action_webview_mode),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
 
@@ -389,21 +405,35 @@ fun ExtractorScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             TextButton(
                                 onClick = { showAdvancedSettings = !showAdvancedSettings },
-                                modifier = Modifier.testTag("toggle_advanced_options")
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("toggle_advanced_options")
                             ) {
                                 Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text(if (showAdvancedSettings) "Ocultar opções de extração" else "Opções de filtro IA & Galeria")
+                                Text(
+                                    text = if (showAdvancedSettings) "Ocultar opções" else "Filtros IA & Galeria",
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             if (preferences.aiSmartFilterEnabled) {
                                 AssistChip(
                                     onClick = { showAdvancedSettings = !showAdvancedSettings },
-                                    label = { Text("Gemini Flash-Lite") },
+                                    label = {
+                                        Text(
+                                            text = "IA Flash",
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    },
                                     leadingIcon = {
                                         Icon(
                                             Icons.Default.AutoAwesome,
@@ -558,24 +588,39 @@ fun ExtractorScreen(
                 is ExtractionUiState.Loading -> {
                     item {
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(20.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                    .padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                                Column {
-                                    Text(
-                                        text = "Extraindo páginas…",
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Text(
-                                        text = state.stageMessage,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Extraindo páginas…",
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                        Text(
+                                            text = state.stageMessage,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(onClick = onOpenWebViewClick) {
+                                        Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Abrir Navegador JS")
+                                    }
                                 }
                             }
                         }

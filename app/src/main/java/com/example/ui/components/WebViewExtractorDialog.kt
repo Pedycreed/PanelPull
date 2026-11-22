@@ -41,6 +41,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import android.webkit.WebSettings
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,7 +58,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.extractor.ComicExtractorEngine
 import com.example.data.extractor.WebSessionCookieStore
 import kotlinx.coroutines.delay
-import org.json.JSONObject
 import java.util.Collections
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -92,6 +93,20 @@ fun WebViewExtractorDialog(
     // Passively records comic image URLs loaded over the network by SPA / Next.js / lazy-loaded readers
     val sniffedImageUrls = remember { Collections.synchronizedList(mutableListOf<String>()) }
     var sniffedCount by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef?.let { wv ->
+                runCatching {
+                    wv.stopLoading()
+                    wv.loadUrl("about:blank")
+                    wv.removeAllViews()
+                    wv.destroy()
+                }
+            }
+            webViewRef = null
+        }
+    }
 
     LaunchedEffect(isAutoScrolling) {
         while (isAutoScrolling) {
@@ -205,58 +220,19 @@ fun WebViewExtractorDialog(
                         onClick = {
                             isAutoScrolling = false
                             WebSessionCookieStore.syncFromWebView(currentUrl)
-                            val js = buildSmartExtractionScript()
+                            val js = WebViewJsScripts.buildSmartExtractionScript()
                             webViewRef?.evaluateJavascript(js) { rawJson ->
                                 val sniffedSnapshot = synchronized(sniffedImageUrls) {
                                     sniffedImageUrls.toList()
                                 }
-                                if (rawJson == null || rawJson == "null") {
-                                    if (sniffedSnapshot.isNotEmpty()) {
-                                        onExtracted(currentUrl, currentTitle, sniffedSnapshot, emptyList())
-                                    }
-                                    return@evaluateJavascript
-                                }
-                                val unquoted = if (rawJson.startsWith("\"") && rawJson.endsWith("\"")) {
-                                    org.json.JSONTokener(rawJson).nextValue().toString()
-                                } else {
-                                    rawJson
-                                }
-                                try {
-                                    val obj = JSONObject(unquoted)
-                                    val url = obj.optString("url", currentUrl)
-                                    val title = obj.optString("title", currentTitle)
-                                    WebSessionCookieStore.syncFromWebView(url)
-
-                                    val domImgs = mutableListOf<String>()
-                                    val imgArr = obj.optJSONArray("images")
-                                    if (imgArr != null) {
-                                        for (i in 0 until imgArr.length()) {
-                                            domImgs.add(imgArr.getString(i))
-                                        }
-                                    }
-
-                                    // Prefer structured DOM/Next.js images; merge network-sniffed images if needed
-                                    val mergedImgs = LinkedHashSet<String>()
-                                    mergedImgs.addAll(domImgs)
-                                    if (mergedImgs.size < 3) {
-                                        mergedImgs.addAll(sniffedSnapshot)
-                                    }
-
-                                    val chArr = obj.optJSONArray("chapters")
-                                    val chapters = buildList {
-                                        if (chArr != null) {
-                                            for (i in 0 until chArr.length()) {
-                                                val item = chArr.getJSONObject(i)
-                                                add(item.optString("text") to item.optString("href"))
-                                            }
-                                        }
-                                    }
-                                    onExtracted(url, title, mergedImgs.toList(), chapters)
-                                } catch (_: Exception) {
-                                    if (sniffedSnapshot.isNotEmpty()) {
-                                        onExtracted(currentUrl, currentTitle, sniffedSnapshot, emptyList())
-                                    }
-                                }
+                                val parsed = WebViewJsScripts.parseExtractionJson(
+                                    rawJson = rawJson,
+                                    fallbackUrl = currentUrl,
+                                    fallbackTitle = currentTitle,
+                                    sniffedSnapshot = sniffedSnapshot
+                                )
+                                WebSessionCookieStore.syncFromWebView(parsed.url)
+                                onExtracted(parsed.url, parsed.title, parsed.images, parsed.chapters)
                             }
                         },
                         modifier = Modifier
@@ -287,7 +263,9 @@ fun WebViewExtractorDialog(
                         }
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
                         settings.loadsImagesAutomatically = true
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         settings.userAgentString = ComicExtractorEngine.BROWSER_USER_AGENT
                         webChromeClient = object : WebChromeClient() {
                             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -307,12 +285,14 @@ fun WebViewExtractorDialog(
                                     }
                                     currentUrl = url
                                 }
+                                view?.evaluateJavascript(WebViewJsScripts.buildNetworkHookScript(), null)
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 if (!url.isNullOrBlank()) {
                                     WebSessionCookieStore.syncFromWebView(url)
                                 }
+                                view?.evaluateJavascript(WebViewJsScripts.buildNetworkHookScript(), null)
                             }
 
                             override fun shouldInterceptRequest(
@@ -320,7 +300,7 @@ fun WebViewExtractorDialog(
                                 request: WebResourceRequest?
                             ): WebResourceResponse? {
                                 val reqUrl = request?.url?.toString().orEmpty()
-                                if (isLikelySniffedComicImage(reqUrl)) {
+                                if (WebViewJsScripts.isLikelySniffedComicImage(reqUrl)) {
                                     WebSessionCookieStore.syncFromWebView(reqUrl)
                                     synchronized(sniffedImageUrls) {
                                         if (!sniffedImageUrls.contains(reqUrl)) {
@@ -353,112 +333,3 @@ fun WebViewExtractorDialog(
         }
     }
 }
-
-private fun isLikelySniffedComicImage(url: String): Boolean {
-    val lower = url.lowercase()
-    if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
-    val hasImageExt = Regex("""\.(?:jpg|jpeg|png|webp|avif|jfif)(?:\?|$)""").containsMatchIn(lower)
-    if (!hasImageExt) return false
-
-    val excluded = listOf(
-        "favicon", "logo", "avatar", "banner", "advert", "ads.", "/ads/",
-        "doubleclick", "googlesyndication", "poster", "posters/", "cover",
-        "covers/", "thumb", "badge", "emoji", "icon", "sprite", "discord",
-        "patreon", "ko-fi", "gravatar", "cloudflare", "captcha"
-    )
-    return excluded.none { lower.contains(it) }
-}
-
-private fun buildSmartExtractionScript(): String = """
-    (function() {
-      var seen = {};
-      var ordered = [];
-      function addUrl(u) {
-        if (!u || typeof u !== 'string') return;
-        u = u.trim();
-        if (!u || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0 || /\.svg(\?|$)/i.test(u)) return;
-        if (/(favicon|logo|avatar|discord|patreon|ko-fi|gravatar|doubleclick|googlesyndication|badge|emoji)/i.test(u)) return;
-        if (!seen[u]) {
-          seen[u] = true;
-          ordered.push(u);
-        }
-      }
-
-      // 1. Try Next.js App Router (__next_f) & __NEXT_DATA__ embedded chapter image arrays first
-      try {
-        var scripts = Array.from(document.querySelectorAll('script'));
-        for (var s = 0; s < scripts.length; s++) {
-          var txt = scripts[s].textContent || '';
-          if (!txt || (txt.indexOf('__next_f') === -1 && txt.indexOf('images') === -1 && txt.indexOf('__NEXT_DATA__') === -1)) continue;
-          var clean = txt
-            .replace(/\\\\\"/g, '"')
-            .replace(/\\\"/g, '"')
-            .replace(/\\\//g, '/')
-            .replace(/\\u0026/g, '&')
-            .replace(/\\u003d/g, '=');
-          var matchIdx = clean.search(/"(images|pages|chapter_images|chapterImages)"\s*:\s*\[/);
-          if (matchIdx !== -1) {
-            var arrStart = clean.indexOf('[', matchIdx);
-            var depth = 0, inStr = false, esc = false, arrEnd = -1;
-            for (var k = arrStart; k < Math.min(clean.length, arrStart + 200000); k++) {
-              var c = clean[k];
-              if (esc) { esc = false; continue; }
-              if (c === '\\' && inStr) { esc = true; continue; }
-              if (c === '"') { inStr = !inStr; continue; }
-              if (!inStr) {
-                if (c === '[') depth++;
-                else if (c === ']') { depth--; if (depth === 0) { arrEnd = k + 1; break; } }
-              }
-            }
-            if (arrEnd > arrStart) {
-              try {
-                var parsed = JSON.parse(clean.slice(arrStart, arrEnd));
-                if (Array.isArray(parsed)) {
-                  parsed.forEach(function(item) {
-                    if (typeof item === 'string') addUrl(item);
-                    else if (item && typeof item === 'object') addUrl(item.url || item.src || item.image || '');
-                  });
-                }
-              } catch (e) {}
-            }
-          }
-        }
-      } catch (e) {}
-
-      // 2. Collect rendered DOM <img> elements (prioritizing reader area and excluding nav/header/footer/aside)
-      var domImgs = Array.from(document.querySelectorAll('img')).map(function(img) {
-        var src = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.src || '';
-        var rect = img.getBoundingClientRect();
-        var inChrome = !!img.closest('header, footer, nav, aside, [class*="sidebar"], [class*="recommend"], [class*="related"]');
-        return {
-          src: src,
-          w: img.naturalWidth || rect.width || 0,
-          h: img.naturalHeight || rect.height || 0,
-          absTop: (rect.top || 0) + (window.scrollY || 0),
-          inChrome: inChrome
-        };
-      }).filter(function(i) {
-        return !i.inChrome && i.src && !i.src.startsWith('data:image/svg') && (i.w === 0 || i.w >= 220 || i.h >= 220);
-      }).sort(function(a, b) {
-        return a.absTop - b.absTop;
-      });
-
-      if (ordered.length < 2) {
-        domImgs.forEach(function(i) { addUrl(i.src); });
-      }
-
-      // 3. Detect chapter links for batch download
-      var links = Array.from(document.querySelectorAll('a[href]')).map(function(a) {
-        return { text: (a.innerText || '').trim(), href: a.href || '' };
-      }).filter(function(l) {
-        return /(chapter|chap|cap[ií]tulo|cap|ep|ch)[-_\/\s#]*\d+/i.test(l.text + ' ' + l.href);
-      }).slice(0, 150);
-
-      return JSON.stringify({
-        url: window.location.href,
-        title: document.title || '',
-        images: ordered,
-        chapters: links
-      });
-    })();
-""".trimIndent()

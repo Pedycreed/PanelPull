@@ -44,6 +44,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.R
+import com.example.ui.components.HeadlessWebViewExtractor
 import com.example.ui.components.InstallAppSheet
 import com.example.ui.components.PageReaderDialog
 import com.example.ui.components.WebViewExtractorDialog
@@ -119,6 +120,7 @@ fun PanelPullApp(
     val readerChapterId by viewModel.readerChapterId.collectAsStateWithLifecycle()
     val readerInitialPage by viewModel.readerInitialPage.collectAsStateWithLifecycle()
     val isExportingApk by viewModel.isExportingApk.collectAsStateWithLifecycle()
+    val headlessExtractUrl by viewModel.headlessExtractUrl.collectAsStateWithLifecycle()
 
     var showWebViewExtractor by remember { mutableStateOf(false) }
     var showInstallAppSheet by remember { mutableStateOf(false) }
@@ -221,7 +223,10 @@ fun PanelPullApp(
                                 batchProgress = batchProgress,
                                 onUrlChange = viewModel::updateUrlInput,
                                 onExtractClick = { viewModel.extractFromUrl() },
-                                onOpenWebViewClick = { showWebViewExtractor = true },
+                                onOpenWebViewClick = {
+                                    viewModel.cancelHeadlessExtraction()
+                                    showWebViewExtractor = true
+                                },
                                 onToggleAutoDownload = viewModel::setAutoDownload,
                                 onToggleAiFilter = viewModel::setAiSmartFilter,
                                 onToggleSaveGallery = viewModel::setSaveToGallery,
@@ -312,6 +317,23 @@ fun PanelPullApp(
                         }
                     )
                 }
+            }
+
+            // Automatic Offscreen Chromium JS Extractor for SPA / Next.js / Comix.to sites
+            val activeHeadlessUrl = headlessExtractUrl
+            if (activeHeadlessUrl != null && !showWebViewExtractor) {
+                HeadlessWebViewExtractor(
+                    url = activeHeadlessUrl,
+                    onStageUpdate = viewModel::updateHeadlessStage,
+                    onFinished = { sourceUrl, pageTitle, imageUrls, chapterLinks ->
+                        viewModel.onHeadlessWebViewResult(
+                            sourceUrl = sourceUrl,
+                            pageTitle = pageTitle,
+                            imageUrls = imageUrls,
+                            chapterLinks = chapterLinks
+                        )
+                    }
+                )
             }
 
             // In-App JS WebView Extractor Overlay

@@ -166,11 +166,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _readerInitialPage = MutableStateFlow(0)
     val readerInitialPage: StateFlow<Int> = _readerInitialPage.asStateFlow()
 
+    private val _headlessExtractUrl = MutableStateFlow<String?>(null)
+    val headlessExtractUrl: StateFlow<String?> = _headlessExtractUrl.asStateFlow()
+
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
+    private var activeExtractJob: Job? = null
     private var activeDownloadJob: Job? = null
     private var activeAiJob: Job? = null
+    private var pendingFastPassFallback: ExtractionResult? = null
 
     fun observeChapter(chapterId: Long) = libraryRepository.observeChapter(chapterId)
 
@@ -200,18 +205,98 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _extractionState.value = ExtractionUiState.Error("Cole uma URL de capítulo ou página da obra.")
             return
         }
-        _urlInput.value = trimmed
-        viewModelScope.launch {
-            _extractionState.value = ExtractionUiState.Loading("Lendo HTML e detectando páginas…")
+        val normalizedUrl = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else {
+            "https://$trimmed"
+        }
+        _urlInput.value = normalizedUrl
+        _headlessExtractUrl.value = null
+        pendingFastPassFallback = null
+        activeExtractJob?.cancel()
+        activeExtractJob = viewModelScope.launch {
+            _extractionState.value = ExtractionUiState.Loading("Lendo API/HTML e detectando páginas…")
             try {
-                val rawResult = extractorEngine.extractFromUrl(trimmed)
-                finalizeExtraction(rawResult)
+                val rawResult = extractorEngine.extractFromUrl(normalizedUrl)
+                val looksLikeChapterUrl = Regex(
+                    """(?i)(chapter|chap|cap[ií]tulo|cap|ep|ch)[-_/.#\s]*\d+"""
+                ).containsMatchIn(normalizedUrl)
+
+                if (rawResult.pages.isNotEmpty() || (!looksLikeChapterUrl && rawResult.detectedChapters.isNotEmpty())) {
+                    finalizeExtraction(rawResult)
+                } else {
+                    // Site returned empty pages (SPA / Next.js hydration / obfuscated API) — automatically run headless Chromium JS engine
+                    pendingFastPassFallback = rawResult
+                    _extractionState.value = ExtractionUiState.Loading(
+                        "Site dinâmico detectado — executando motor JS automático…"
+                    )
+                    _headlessExtractUrl.value = normalizedUrl
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Extraction failed for $trimmed", e)
+                Log.w(TAG, "Direct HTTP extraction failed for $normalizedUrl; switching to automatic JS engine", e)
+                _extractionState.value = ExtractionUiState.Loading(
+                    "Acesso direto bloqueado — executando motor JS automático…"
+                )
+                _headlessExtractUrl.value = normalizedUrl
+            }
+        }
+    }
+
+    fun updateHeadlessStage(stageMessage: String) {
+        if (_headlessExtractUrl.value != null) {
+            _extractionState.value = ExtractionUiState.Loading(stageMessage)
+        }
+    }
+
+    fun cancelHeadlessExtraction() {
+        _headlessExtractUrl.value = null
+        pendingFastPassFallback = null
+        if (_extractionState.value is ExtractionUiState.Loading) {
+            _extractionState.value = ExtractionUiState.Idle
+        }
+    }
+
+    fun onHeadlessWebViewResult(
+        sourceUrl: String,
+        pageTitle: String,
+        imageUrls: List<String>,
+        chapterLinks: List<Pair<String, String>>
+    ) {
+        _headlessExtractUrl.value = null
+        val fallback = pendingFastPassFallback
+        pendingFastPassFallback = null
+
+        activeExtractJob?.cancel()
+        activeExtractJob = viewModelScope.launch {
+            _extractionState.value = ExtractionUiState.Loading("Organizando páginas capturadas…")
+            try {
+                val built = extractorEngine.buildResultFromWebViewExtraction(
+                    sourceUrl = sourceUrl,
+                    pageTitle = pageTitle,
+                    imageUrls = imageUrls,
+                    chapterLinks = chapterLinks
+                )
+                val mergedResult = if (built.detectedChapters.isEmpty() && fallback != null && fallback.detectedChapters.isNotEmpty()) {
+                    built.copy(detectedChapters = fallback.detectedChapters)
+                } else {
+                    built
+                }
+
+                if (mergedResult.pages.isEmpty() && mergedResult.detectedChapters.isEmpty()) {
+                    _extractionState.value = ExtractionUiState.Error(
+                        "O site exigiu verificação humana ou carregamento interativo. Toque em Abrir no Navegador JS, aguarde as páginas aparecerem e toque em Capturar Imagens."
+                    )
+                    return@launch
+                }
+                finalizeExtraction(mergedResult)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Headless WebView extraction processing failed", e)
                 _extractionState.value = ExtractionUiState.Error(
-                    e.localizedMessage ?: "Falha ao extrair imagens da URL."
+                    e.localizedMessage ?: "Falha ao processar imagens do motor JS."
                 )
             }
         }
@@ -223,8 +308,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         imageUrls: List<String>,
         chapterLinks: List<Pair<String, String>>
     ) {
+        _headlessExtractUrl.value = null
+        pendingFastPassFallback = null
         _urlInput.value = sourceUrl
-        viewModelScope.launch {
+        activeExtractJob?.cancel()
+        activeExtractJob = viewModelScope.launch {
             _extractionState.value = ExtractionUiState.Loading("Processando imagens capturadas pelo navegador…")
             try {
                 val rawResult = extractorEngine.buildResultFromWebViewExtraction(

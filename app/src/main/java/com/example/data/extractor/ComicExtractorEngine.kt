@@ -233,7 +233,9 @@ class ComicExtractorEngine(
     private fun collectFromEmbeddedScripts(doc: Document, baseUrl: String): List<ExtractedPageCandidate> {
         val ordered = LinkedHashMap<String, ExtractedPageCandidate>()
 
+        val stitchedNextF = buildStitchedNextFPayload(doc)
         val scriptPayloads = buildList {
+            if (stitchedNextF.isNotBlank()) add(stitchedNextF)
             doc.selectFirst("script#__NEXT_DATA__")?.data()?.takeIf { it.isNotBlank() }?.let { add(it) }
             doc.select("script").forEach { script ->
                 val data = script.data()
@@ -252,9 +254,9 @@ class ComicExtractorEngine(
             }
         }
 
-        // Pattern A: Explicit JSON arrays named "images", "pages", "chapter_images", "chapterImages", "sources"
+        // Pattern A: Explicit JSON arrays named "images", "pages", "chapter_images", "chapterImages", "sources", "files"
         val arrayKeyRegex = Regex(
-            """"(?:images|pages|chapter_images|chapterImages|md_images|sources)"\s*:\s*\[""",
+            """"(?:images|pages|chapter_images|chapterImages|md_images|sources|files)"\s*:\s*\[""",
             RegexOption.IGNORE_CASE
         )
 
@@ -276,6 +278,7 @@ class ComicExtractorEngine(
                                     .ifBlank { item.optString("src") }
                                     .ifBlank { item.optString("image") }
                                     .ifBlank { item.optString("image_url") }
+                                    .ifBlank { item.optString("file") }
                                 w = item.optInt("width", item.optInt("w", 0))
                                 h = item.optInt("height", item.optInt("h", 0))
                             }
@@ -336,6 +339,24 @@ class ComicExtractorEngine(
                 )
             }
         }
+    }
+
+    /**
+     * Concatenates string chunks pushed into Next.js App Router's `self.__next_f.push([1, "..."])`
+     * across multiple <script> tags so JSON payloads split across chunks can be parsed intact.
+     */
+    private fun buildStitchedNextFPayload(doc: Document): String {
+        val sb = StringBuilder()
+        val pushRegex = Regex("""__next_f\.push\(\s*\[\s*\d+\s*,\s*"((?:[^"\\]|\\.)*)"\s*\]\s*\)""")
+        doc.select("script").forEach { script ->
+            val data = script.data()
+            if (data.contains("__next_f")) {
+                pushRegex.findAll(data).forEach { m ->
+                    sb.append(m.groupValues[1])
+                }
+            }
+        }
+        return sb.toString()
     }
 
     private fun unescapeEmbeddedJson(raw: String): String {
@@ -403,14 +424,19 @@ class ComicExtractorEngine(
             }
         }
 
-        // Also look for Comix-style chapter objects embedded in Next.js scripts
+        // Also look for Comix-style chapter objects embedded in Next.js scripts (stitched + individual)
         if (links.isEmpty()) {
             val comixParts = comixSiteExtractor.parseComixUrl(baseUrl)
             if (comixParts != null) {
                 val baseOrigin = "https://${comixParts.host}"
                 val chObjRegex = Regex("""\"chapter_id\"\s*:\s*(\d+)[^\}]{0,200}?\"number\"\s*:\s*\"?(\d+(?:\.\d+)?)\"?""")
-                doc.select("script").forEach { script ->
-                    val normalized = unescapeEmbeddedJson(script.data())
+                val candidatesToScan = buildList {
+                    val stitched = buildStitchedNextFPayload(doc)
+                    if (stitched.isNotBlank()) add(stitched)
+                    doc.select("script").forEach { add(it.data()) }
+                }
+                candidatesToScan.forEach { raw ->
+                    val normalized = unescapeEmbeddedJson(raw)
                     chObjRegex.findAll(normalized).forEach { m ->
                         val chId = m.groupValues[1]
                         val chNum = m.groupValues[2].removeSuffix(".0")

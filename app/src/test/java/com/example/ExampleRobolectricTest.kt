@@ -161,4 +161,83 @@ class ExampleRobolectricTest {
         assertTrue(info.suggestedFileName.startsWith("PanelPull-v"))
         assertTrue(info.suggestedFileName.endsWith(".apk"))
     }
+
+    @Test
+    fun `extractor stitches multi-chunk next_f scripts split across script tags`() {
+        val html = """
+            <html>
+              <head><title>Comix</title></head>
+              <body>
+                <script>
+                  self.__next_f.push([1,"{\"chapter_id\":2922186,\"number\":19,\"images\":[{\"url\":\"https:\/\/wowpic.store\/ch19\/001.webp\"},"]);
+                </script>
+                <script>
+                  self.__next_f.push([1,"{\"url\":\"https:\/\/wowpic.store\/ch19\/002.webp\"}]}"]);
+                </script>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val engine = ComicExtractorEngine()
+        val result = engine.parseHtmlDocument(
+            "https://comix.to/title/vlxz-ive-become-the-devils-master/2922186-chapter-19",
+            html
+        )
+
+        assertEquals(2, result.pages.size)
+        assertEquals("https://wowpic.store/ch19/001.webp", result.pages[0].imageUrl)
+        assertEquals("https://wowpic.store/ch19/002.webp", result.pages[1].imageUrl)
+    }
+
+    @Test
+    fun `comix api parser handles nested chapter object and files key`() {
+        val comix = ComixSiteExtractor(ComicExtractorEngine.defaultHttpClient())
+        val nestedJson = JSONObject(
+            """
+            {
+              "result": {
+                "chapter": {
+                  "number": "19",
+                  "files": [
+                    { "file": "https://wowpic.store/2922186/p1.webp" },
+                    { "image_url": "https://wowpic.store/2922186/p2.webp" }
+                  ]
+                }
+              }
+            }
+            """.trimIndent()
+        )
+        val (pages, chNum) = comix.parseChapterApiResponse(
+            nestedJson,
+            "https://comix.to/title/vlxz-ive-become-the-devils-master/2922186-chapter-19",
+            "19"
+        )
+        assertEquals("19", chNum)
+        assertEquals(2, pages.size)
+        assertEquals("https://wowpic.store/2922186/p1.webp", pages[0].imageUrl)
+        assertEquals("https://wowpic.store/2922186/p2.webp", pages[1].imageUrl)
+    }
+
+    @Test
+    fun `webview script helper filters posters and parses api extraction json`() {
+        assertTrue(
+            com.example.ui.components.WebViewJsScripts.isLikelySniffedComicImage(
+                "https://wowpic2.store/files/2922186/page01.webp"
+            )
+        )
+        assertTrue(
+            !com.example.ui.components.WebViewJsScripts.isLikelySniffedComicImage(
+                "https://comix.to/posters/cover.jpg"
+            )
+        )
+        val payload = com.example.ui.components.WebViewJsScripts.parseExtractionJson(
+            rawJson = """{"url":"https://comix.to/title/vlxz-ive-become-the-devils-master/2922186-chapter-19","title":"Chapter 19","images":["https://wowpic.store/1.webp","https://wowpic.store/2.webp"],"chapters":[{"text":"Capítulo 20","href":"https://comix.to/title/vlxz-ive-become-the-devils-master/2922190-chapter-20"}],"source":"api","readyState":"complete"}""",
+            fallbackUrl = "https://comix.to",
+            fallbackTitle = "Comix",
+            sniffedSnapshot = emptyList()
+        )
+        assertEquals("api", payload.source)
+        assertEquals(2, payload.images.size)
+        assertEquals(1, payload.chapters.size)
+    }
 }

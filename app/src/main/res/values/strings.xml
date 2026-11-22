@@ -8,7 +8,7 @@
     <string name="url_input_placeholder">Cole a URL do capítulo ou da obra…</string>
     <string name="action_paste_url">Colar</string>
     <string name="action_extract">Extrair Imagens</string>
-    <string name="action_webview_mode">Navegador JS</string>
+    <string name="action_webview_mode">Navegador</string>
     <string name="toggle_auto_download">Baixar automaticamente capítulos</string>
     <string name="toggle_ai_filter">Filtro inteligente Gemini</string>
     <string name="toggle_save_gallery">Salvar também em Pictures/PanelPull</string>

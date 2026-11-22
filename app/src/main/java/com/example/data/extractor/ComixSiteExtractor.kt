@@ -149,15 +149,19 @@ class ComixSiteExtractor(
         refererUrl: String,
         fallbackChapterNumber: String
     ): Pair<List<ExtractedPageCandidate>, String> {
-        val resultObj = json.optJSONObject("result")
+        val rootObj = json.optJSONObject("result")
             ?: json.optJSONObject("data")
             ?: json
+        val resultObj = rootObj.optJSONObject("chapter") ?: rootObj
 
         val num = resultObj.optString("number").ifBlank {
             resultObj.optString("chapter").ifBlank { fallbackChapterNumber }
         }
         val imagesArray = resultObj.optJSONArray("images")
             ?: resultObj.optJSONArray("pages")
+            ?: resultObj.optJSONArray("files")
+            ?: rootObj.optJSONArray("images")
+            ?: rootObj.optJSONArray("pages")
             ?: JSONArray()
 
         val pages = mutableListOf<ExtractedPageCandidate>()
@@ -168,6 +172,8 @@ class ComixSiteExtractor(
                     val imgUrl = entry.optString("url")
                         .ifBlank { entry.optString("src") }
                         .ifBlank { entry.optString("image") }
+                        .ifBlank { entry.optString("image_url") }
+                        .ifBlank { entry.optString("file") }
                     if (imgUrl.startsWith("http://") || imgUrl.startsWith("https://")) {
                         pages.add(
                             ExtractedPageCandidate(
