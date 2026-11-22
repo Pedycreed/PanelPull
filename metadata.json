@@ -1,0 +1,6 @@
+{
+  "name": "PanelPull",
+  "description": "Extrator de páginas e capítulos de manhwas, mangás e webtoons a partir de URLs com download organizado, cópia individual de páginas e ferramentas de IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

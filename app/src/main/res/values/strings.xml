@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">PanelPull</string>
+    <string name="tab_extractor">Extrair</string>
+    <string name="tab_library">Biblioteca</string>
+    <string name="tab_ai_analyzer">Analisar IA</string>
+    <string name="tab_cover_studio">Estúdio</string>
+    <string name="extractor_hero_subtitle">Extraia apenas páginas de mangás, manhwas e webtoons com organização automática por capítulo</string>
+    <string name="url_input_placeholder">Cole a URL do capítulo ou da obra…</string>
+    <string name="action_paste_url">Colar</string>
+    <string name="action_extract">Extrair Imagens</string>
+    <string name="action_webview_mode">Navegador JS</string>
+    <string name="toggle_auto_download">Baixar automaticamente capítulos</string>
+    <string name="toggle_ai_filter">Filtro inteligente Gemini</string>
+    <string name="toggle_save_gallery">Salvar também em Pictures/PanelPull</string>
+    <string name="action_download_chapter">Baixar Capítulo Organizado</string>
+    <string name="action_copy_page">Copiar</string>
+    <string name="action_copy_link">Link</string>
+    <string name="action_analyze_page">IA</string>
+    <string name="action_share_page">Enviar</string>
+    <string name="empty_library_title">Nenhum capítulo organizado ainda</string>
+    <string name="empty_library_subtitle">Extraia um capítulo na aba Extrair para organizar automaticamente em pastas por obra e capítulo.</string>
+    <string name="ai_upload_photo">Enviar Captura da Galeria</string>
+    <string name="studio_generate_button">Gerar Arte</string>
+    <string name="install_app_sheet_title">Baixar App Android</string>
+    <string name="install_app_sheet_subtitle">Salve o pacote instalador (.apk) do PanelPull para guardar ou instalar em qualquer celular Android.</string>
+    <string name="action_download_apk">Baixar APK (.apk)</string>
+    <string name="action_share_apk">Compartilhar APK para Outro Celular</string>
+    <string name="action_install_app_short">Baixar App</string>
+</resources>
