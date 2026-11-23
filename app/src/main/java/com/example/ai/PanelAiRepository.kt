@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.data.model.ComicFormat
 import com.example.data.model.ExtractedPageCandidate
 import com.example.data.model.StudioAspectRatio
+import com.example.data.prefs.CustomAiSettings
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.AspectRatio
@@ -32,7 +33,9 @@ data class AiExtractionFilterResult(
     val keptIndices: List<Int>
 )
 
-class PanelAiRepository {
+class PanelAiRepository(
+    private val customApiClient: CustomAiApiClient = CustomAiApiClient()
+) {
 
     private val fastFilterModel by lazy {
         val filterSchema = Schema.obj(
@@ -78,10 +81,17 @@ class PanelAiRepository {
         Firebase.ai.generativeModel(modelName = "gemini-4-hydrogen")
     }
 
+    suspend fun testCustomApiConnection(settings: CustomAiSettings): String {
+        return withTimeout(30_000L) {
+            customApiClient.testConnection(settings)
+        }
+    }
+
     suspend fun filterExtractedPagesFast(
         sourceUrl: String,
         rawTitle: String,
-        candidates: List<ExtractedPageCandidate>
+        candidates: List<ExtractedPageCandidate>,
+        aiSettings: CustomAiSettings = CustomAiSettings()
     ): AiExtractionFilterResult {
         if (candidates.isEmpty()) {
             return AiExtractionFilterResult(
@@ -127,18 +137,29 @@ class PanelAiRepository {
         }
         val prompt = """
             Você é um filtro de extração para mangás, manhwas e webtoons.
+            Responda APENAS com um objeto JSON válido contendo as chaves:
+            {"seriesTitle":"...","chapterNumber":"...","comicFormat":"MANHWA|MANGA|WEBTOON","excludedIndices":[...]}
             1) Identifique o nome limpo da obra (seriesTitle), o número do capítulo (chapterNumber) e o formato (MANHWA, MANGA ou WEBTOON).
             2) Em excludedIndices, liste SOMENTE os índices que forem CLARAMENTE anúncios, banners de scanlator/Discord/Pix/doações, avatares, ícones de UI ou capas de outras obras.
             3) NUNCA exclua páginas reais do capítulo. Se todas parecerem páginas válidas do capítulo, retorne excludedIndices vazio [].
             $listing
         """.trimIndent()
 
-        val response = withTimeout(45_000L) {
-            fastFilterModel.generateContent(prompt)
+        val rawJsonText = withTimeout(45_000L) {
+            if (aiSettings.isCustomApiActive) {
+                customApiClient.generateText(
+                    settings = aiSettings,
+                    prompt = prompt,
+                    bitmap = null,
+                    expectJson = true
+                )
+            } else {
+                fastFilterModel.generateContent(prompt).text
+                    ?: throw IllegalStateException("Modelo retornou resposta vazia ao filtrar URL.")
+            }
         }
-        val jsonText = response.text
-            ?: throw IllegalStateException("Modelo retornou resposta vazia ao filtrar URL.")
-        val json = JSONObject(jsonText)
+        val cleanedJson = stripMarkdownJsonFences(rawJsonText)
+        val json = JSONObject(cleanedJson)
         val series = json.optString("seriesTitle", rawTitle).ifBlank { rawTitle }
         val chapter = json.optString("chapterNumber", "001").ifBlank { "001" }
         val format = when (json.optString("comicFormat", "MANHWA").uppercase()) {
@@ -175,7 +196,8 @@ class PanelAiRepository {
 
     fun analyzeComicPageStream(
         bitmap: Bitmap,
-        userPrompt: String
+        userPrompt: String,
+        aiSettings: CustomAiSettings = CustomAiSettings()
     ): Flow<String> = flow {
         val fullPrompt = if (userPrompt.isBlank()) {
             "Analise esta página de mangá/manhwa/webtoon em português do Brasil: " +
@@ -184,6 +206,20 @@ class PanelAiRepository {
         } else {
             userPrompt
         }
+
+        if (aiSettings.isCustomApiActive) {
+            val text = withTimeout(60_000L) {
+                customApiClient.generateText(
+                    settings = aiSettings,
+                    prompt = fullPrompt,
+                    bitmap = bitmap,
+                    expectJson = false
+                )
+            }
+            emit(text)
+            return@flow
+        }
+
         val accumulated = StringBuilder()
         withTimeout(60_000L) {
             visionModel.generateContentStream(
@@ -206,8 +242,22 @@ class PanelAiRepository {
 
     fun analyzeDeepThinkingStream(
         bitmap: Bitmap?,
-        prompt: String
+        prompt: String,
+        aiSettings: CustomAiSettings = CustomAiSettings()
     ): Flow<String> = flow {
+        if (aiSettings.isCustomApiActive) {
+            val text = withTimeout(60_000L) {
+                customApiClient.generateText(
+                    settings = aiSettings,
+                    prompt = prompt,
+                    bitmap = bitmap,
+                    expectJson = false
+                )
+            }
+            emit(text)
+            return@flow
+        }
+
         val accumulated = StringBuilder()
         withTimeout(60_000L) {
             val flowSource = if (bitmap != null) {
@@ -235,8 +285,22 @@ class PanelAiRepository {
 
     fun askGeneralAssistantStream(
         bitmap: Bitmap?,
-        prompt: String
+        prompt: String,
+        aiSettings: CustomAiSettings = CustomAiSettings()
     ): Flow<String> = flow {
+        if (aiSettings.isCustomApiActive) {
+            val text = withTimeout(60_000L) {
+                customApiClient.generateText(
+                    settings = aiSettings,
+                    prompt = prompt,
+                    bitmap = bitmap,
+                    expectJson = false
+                )
+            }
+            emit(text)
+            return@flow
+        }
+
         val accumulated = StringBuilder()
         withTimeout(60_000L) {
             val flowSource = if (bitmap != null) {
@@ -266,8 +330,20 @@ class PanelAiRepository {
         prompt: String,
         aspectRatio: StudioAspectRatio,
         useProQuality: Boolean,
-        referenceBitmap: Bitmap? = null
+        referenceBitmap: Bitmap? = null,
+        aiSettings: CustomAiSettings = CustomAiSettings()
     ): Bitmap {
+        if (aiSettings.isCustomApiActive) {
+            return withTimeout(60_000L) {
+                customApiClient.generateImage(
+                    settings = aiSettings,
+                    prompt = prompt,
+                    aspectRatio = aspectRatio,
+                    referenceBitmap = referenceBitmap
+                )
+            }
+        }
+
         val modelName = if (useProQuality) {
             "gemini-3-pro-image-preview"
         } else {
@@ -306,6 +382,14 @@ class PanelAiRepository {
 
         return imagePart?.image
             ?: throw IllegalStateException("Nenhuma imagem foi gerada pelo modelo ($modelName).")
+    }
+
+    private fun stripMarkdownJsonFences(raw: String): String {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("```")) return trimmed
+        val firstNewline = trimmed.indexOf('\n')
+        val withoutStart = if (firstNewline >= 0) trimmed.substring(firstNewline + 1) else trimmed.removePrefix("```")
+        return withoutStart.removeSuffix("```").trim()
     }
 
     private fun StudioAspectRatio.toFirebaseAspectRatio(): AspectRatio = when (this) {

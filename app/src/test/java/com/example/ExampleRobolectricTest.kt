@@ -476,4 +476,23 @@ class ExampleRobolectricTest {
             tempRoot.deleteRecursively()
         }
     }
+
+    @Test
+    fun `api key secure store masks keys, roundtrips encryption, and rejects non-https or private urls`() {
+        val sampleKey = "sk-test-1234567890abcdef"
+        val encrypted = com.example.data.prefs.ApiKeySecureStore.encrypt(sampleKey)
+        assertTrue(encrypted.isNotBlank() && !encrypted.contains(sampleKey))
+        assertEquals(sampleKey, com.example.data.prefs.ApiKeySecureStore.decrypt(encrypted))
+        assertEquals("sk-t••••cdef", com.example.data.prefs.ApiKeySecureStore.maskApiKey(sampleKey))
+
+        assertEquals(
+            "https://openrouter.ai/api/v1",
+            com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://openrouter.ai/api/v1/")
+        )
+        assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("http://api.openai.com/v1"))
+        assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://localhost/v1"))
+        assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://127.0.0.1/v1"))
+        assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://169.254.169.254/latest"))
+        assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://192.168.1.5/v1"))
+    }
 }

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -64,6 +65,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.prefs.CustomAiSettings
 import com.example.ui.AiAnalysisMode
 import com.example.ui.AiUiState
 
@@ -74,10 +76,12 @@ fun AiAnalyzerScreen(
     bitmapLabel: String,
     selectedMode: AiAnalysisMode,
     aiState: AiUiState,
+    customAiSettings: CustomAiSettings,
     onSelectMode: (AiAnalysisMode) -> Unit,
     onUploadPhotoUri: (android.net.Uri) -> Unit,
     onClearImage: () -> Unit,
     onAnalyzeClick: (String) -> Unit,
+    onOpenApiKeySettings: () -> Unit,
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -121,11 +125,39 @@ fun AiAnalyzerScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "Leitura & Análise IA",
-                        style = MaterialTheme.typography.headlineMedium
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Leitura & Análise IA",
+                            style = MaterialTheme.typography.headlineMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        AssistChip(
+                            onClick = onOpenApiKeySettings,
+                            label = {
+                                Text(
+                                    text = if (customAiSettings.isCustomApiActive) {
+                                        customAiSettings.provider.shortBadge
+                                    } else {
+                                        "API Key"
+                                    },
+                                    maxLines = 1
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Key,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            modifier = Modifier.testTag("ai_screen_apikey_chip")
+                        )
+                    }
                     Text(
                         text = "Envie qualquer captura da galeria ou selecione uma página extraída para traduzir e analisar.",
                         style = MaterialTheme.typography.bodyMedium,

@@ -44,6 +44,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.R
+import com.example.ui.components.ApiKeySettingsDialog
 import com.example.ui.components.HeadlessWebViewExtractor
 import com.example.ui.components.InstallAppSheet
 import com.example.ui.components.PageReaderDialog
@@ -124,9 +125,11 @@ fun PanelPullApp(
     val headlessExtractUrl by viewModel.headlessExtractUrl.collectAsStateWithLifecycle()
     val smartStitchTarget by viewModel.smartStitchTarget.collectAsStateWithLifecycle()
     val smartStitchState by viewModel.smartStitchState.collectAsStateWithLifecycle()
+    val apiKeyTestState by viewModel.apiKeyTestState.collectAsStateWithLifecycle()
 
     var showWebViewExtractor by remember { mutableStateOf(false) }
     var showInstallAppSheet by remember { mutableStateOf(false) }
+    var showApiKeySettings by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val navController = rememberNavController()
@@ -164,7 +167,7 @@ fun PanelPullApp(
                 contentWindowInsets = WindowInsets.safeDrawing,
                 snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                 bottomBar = {
-                    if (!useNavigationRail && readerChapterId == null && !showWebViewExtractor && smartStitchTarget == null) {
+                    if (!useNavigationRail && readerChapterId == null && !showWebViewExtractor && smartStitchTarget == null && !showApiKeySettings) {
                         NavigationBar {
                             navTabs.forEach { tab ->
                                 val selected = currentRoute == tab.route
@@ -191,7 +194,7 @@ fun PanelPullApp(
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    if (useNavigationRail && readerChapterId == null && !showWebViewExtractor && smartStitchTarget == null) {
+                    if (useNavigationRail && readerChapterId == null && !showWebViewExtractor && smartStitchTarget == null && !showApiKeySettings) {
                         NavigationRail {
                             navTabs.forEach { tab ->
                                 val selected = currentRoute == tab.route
@@ -254,7 +257,11 @@ fun PanelPullApp(
                                 onOpenSmartStitchGallery = {
                                     viewModel.openSmartStitchForGallery(emptyList())
                                 },
-                                onToggleViewingStitched = viewModel::setViewingStitched
+                                onToggleViewingStitched = viewModel::setViewingStitched,
+                                onOpenApiKeySettings = {
+                                    viewModel.resetApiKeyTestState()
+                                    showApiKeySettings = true
+                                }
                             )
                         }
 
@@ -282,10 +289,15 @@ fun PanelPullApp(
                                 bitmapLabel = aiBitmapLabel,
                                 selectedMode = aiMode,
                                 aiState = aiState,
+                                customAiSettings = preferences.customAiSettings,
                                 onSelectMode = viewModel::setAiMode,
                                 onUploadPhotoUri = viewModel::loadPhotoPickerUriForAi,
                                 onClearImage = viewModel::clearAiImage,
                                 onAnalyzeClick = viewModel::runAiAnalysis,
+                                onOpenApiKeySettings = {
+                                    viewModel.resetApiKeyTestState()
+                                    showApiKeySettings = true
+                                },
                                 onShowMessage = { msg ->
                                     coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
                                 }
@@ -297,11 +309,16 @@ fun PanelPullApp(
                                 selectedRatio = studioRatio,
                                 referenceBitmap = studioReference,
                                 studioState = studioState,
+                                customAiSettings = preferences.customAiSettings,
                                 onSelectRatio = viewModel::selectStudioAspectRatio,
                                 onPickReferenceUri = viewModel::loadPhotoPickerUriForStudio,
                                 onClearReference = viewModel::clearStudioReference,
                                 onGenerateClick = viewModel::generateStudioCover,
-                                onCopyArtwork = viewModel::copyStudioBitmap
+                                onCopyArtwork = viewModel::copyStudioBitmap,
+                                onOpenApiKeySettings = {
+                                    viewModel.resetApiKeyTestState()
+                                    showApiKeySettings = true
+                                }
                             )
                         }
                     }
@@ -373,8 +390,31 @@ fun PanelPullApp(
                         viewModel.openReader(chId, pageIdx)
                     },
                     onCopyStitchedPage = viewModel::copyPageImage,
+                    onDownloadStitchedPage = viewModel::downloadSinglePage,
+                    onExportStitchedPageToUri = viewModel::exportSinglePageToUri,
                     onShareStitchedPage = viewModel::sharePage,
                     onExportStitchedCbz = viewModel::exportChapterAsCbz
+                )
+            }
+
+            // Optional Custom AI API Key Configuration Overlay
+            if (showApiKeySettings) {
+                ApiKeySettingsDialog(
+                    currentSettings = preferences.customAiSettings,
+                    testState = apiKeyTestState,
+                    onDismiss = {
+                        viewModel.resetApiKeyTestState()
+                        showApiKeySettings = false
+                    },
+                    onTestConnection = viewModel::testCustomApiKey,
+                    onSaveSettings = { newSettings ->
+                        viewModel.saveCustomAiSettings(newSettings)
+                        showApiKeySettings = false
+                    },
+                    onResetToDefault = {
+                        viewModel.resetCustomAiSettings()
+                        showApiKeySettings = false
+                    }
                 )
             }
 

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Link
@@ -133,6 +134,7 @@ fun ExtractorScreen(
     onOpenSmartStitchChapter: (ChapterWithPages, seriesTitle: String, comicFormat: String) -> Unit,
     onOpenSmartStitchGallery: () -> Unit,
     onToggleViewingStitched: (Boolean) -> Unit,
+    onOpenApiKeySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -264,6 +266,22 @@ fun ExtractorScreen(
                                             color = Color.White
                                         )
                                     }
+                                }
+                                IconButton(
+                                    onClick = onOpenApiKeySettings,
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("open_apikey_settings_hero_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Key,
+                                        contentDescription = "Configurar API Key de IA",
+                                        tint = if (preferences.customAiSettings.isCustomApiActive) {
+                                            EmeraldSuccess
+                                        } else {
+                                            Color.White
+                                        }
+                                    )
                                 }
                                 IconButton(
                                     onClick = { onToggleTheme(!preferences.darkTheme) },
@@ -498,6 +516,46 @@ fun ExtractorScreen(
                                         checked = preferences.saveToGalleryPictures,
                                         onCheckedChange = onToggleSaveGallery
                                     )
+                                }
+
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "API Key de IA (Opcional)",
+                                            style = MaterialTheme.typography.bodyLarge
+                                        )
+                                        Text(
+                                            text = if (preferences.customAiSettings.isCustomApiActive) {
+                                                "Ativa: ${preferences.customAiSettings.activeBadgeLabel}"
+                                            } else {
+                                                "Usando padrão do app (Firebase AI). Toque para usar sua própria chave."
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (preferences.customAiSettings.isCustomApiActive) {
+                                                EmeraldSuccess
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            }
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    FilledTonalButton(
+                                        onClick = onOpenApiKeySettings,
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                        modifier = Modifier
+                                            .height(48.dp)
+                                            .testTag("open_apikey_settings_options_button")
+                                    ) {
+                                        Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("API Key", maxLines = 1)
+                                    }
                                 }
                             }
                         }

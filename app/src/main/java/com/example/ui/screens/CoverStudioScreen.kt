@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -63,6 +64,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.StudioAspectRatio
+import com.example.data.prefs.CustomAiSettings
 import com.example.ui.StudioUiState
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -71,11 +73,13 @@ fun CoverStudioScreen(
     selectedRatio: StudioAspectRatio,
     referenceBitmap: Bitmap?,
     studioState: StudioUiState,
+    customAiSettings: CustomAiSettings,
     onSelectRatio: (StudioAspectRatio) -> Unit,
     onPickReferenceUri: (Uri) -> Unit,
     onClearReference: () -> Unit,
     onGenerateClick: (prompt: String, useProQuality: Boolean) -> Unit,
     onCopyArtwork: (Bitmap) -> Unit,
+    onOpenApiKeySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var prompt by rememberSaveable { mutableStateOf("") }
@@ -105,11 +109,39 @@ fun CoverStudioScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "Estúdio de Capas & Arte",
-                        style = MaterialTheme.typography.headlineMedium
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Estúdio de Capas & Arte",
+                            style = MaterialTheme.typography.headlineMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        AssistChip(
+                            onClick = onOpenApiKeySettings,
+                            label = {
+                                Text(
+                                    text = if (customAiSettings.isCustomApiActive) {
+                                        customAiSettings.provider.shortBadge
+                                    } else {
+                                        "API Key"
+                                    },
+                                    maxLines = 1
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Key,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            modifier = Modifier.testTag("studio_screen_apikey_chip")
+                        )
+                    }
                     Text(
                         text = "Crie capas personalizadas de coleção ou reestilize páginas com controle exato de proporção.",
                         style = MaterialTheme.typography.bodyMedium,

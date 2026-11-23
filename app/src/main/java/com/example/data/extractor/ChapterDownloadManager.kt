@@ -102,19 +102,56 @@ class ChapterDownloadManager(
         finalStatus
     }
 
+    data class SinglePageDownloadOutcome(
+        val file: File,
+        val savedToGallery: Boolean,
+        val galleryDisplayPath: String?
+    )
+
     suspend fun downloadSinglePage(
         page: PageEntity,
         chapter: ChapterEntity,
         seriesTitle: String,
         saveToGalleryPictures: Boolean
-    ): File? = withContext(Dispatchers.IO) {
+    ): SinglePageDownloadOutcome? = withContext(Dispatchers.IO) {
+        val seriesFolder = LibraryRepository.sanitizeFileSegment(seriesTitle)
+        val rawChapterFolder = LibraryRepository.buildChapterFolderName(chapter.chapterNumber, chapter.chapterLabel)
+        val isSmartStitch = chapter.chapterLabel.contains("SmartStitch", ignoreCase = true) ||
+            chapter.sourceUrl.endsWith("#smartstitch") ||
+            chapter.folderPath.contains("_SmartStitch", ignoreCase = true)
+        val chapterFolder = if (isSmartStitch && !rawChapterFolder.endsWith("_SmartStitch")) {
+            "${rawChapterFolder}_SmartStitch"
+        } else {
+            rawChapterFolder
+        }
+        val galleryRelPath = "${Environment.DIRECTORY_PICTURES}/PanelPull/$seriesFolder/$chapterFolder"
+
         val existing = page.localFilePath?.let { File(it) }
         if (existing != null && existing.exists() && existing.length() > 0L) {
-            return@withContext existing
+            var mirrored = false
+            if ((saveToGalleryPictures || isSmartStitch) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val bytes = existing.readBytes()
+                val (ext, mime) = ComicImageLoader.detectFormatFromBytes(bytes, existing.name)
+                val displayName = if (isSmartStitch) {
+                    "SmartStitch_${(page.pageIndex + 1).toString().padStart(3, '0')}.$ext"
+                } else {
+                    existing.name
+                }
+                mirrored = mirrorToPicturesMediaStore(
+                    bytes = bytes,
+                    displayName = displayName,
+                    mimeType = mime,
+                    relativePath = galleryRelPath
+                )
+            }
+            return@withContext SinglePageDownloadOutcome(
+                file = existing,
+                savedToGallery = mirrored,
+                galleryDisplayPath = if (mirrored) galleryRelPath else null
+            )
         }
+
         val chapterDir = File(chapter.folderPath).apply { mkdirs() }
-        val seriesFolder = LibraryRepository.sanitizeFileSegment(seriesTitle)
-        val chapterFolder = LibraryRepository.buildChapterFolderName(chapter.chapterNumber, chapter.chapterLabel)
         downloadSinglePageInternal(
             page = page,
             chapterDir = chapterDir,
@@ -123,11 +160,35 @@ class ChapterDownloadManager(
             saveToGalleryPictures = saveToGalleryPictures,
             minWidthPx = 0
         )
-        repository.getPagesForChapter(chapter.id)
+        val savedFile = repository.getPagesForChapter(chapter.id)
             .firstOrNull { it.id == page.id }
             ?.localFilePath
             ?.let { File(it) }
             ?.takeIf { it.exists() }
+            ?: return@withContext null
+
+        SinglePageDownloadOutcome(
+            file = savedFile,
+            savedToGallery = saveToGalleryPictures && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+            galleryDisplayPath = if (saveToGalleryPictures && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) galleryRelPath else null
+        )
+    }
+
+    suspend fun exportSinglePageToUri(
+        page: PageEntity,
+        outputUri: Uri
+    ): Boolean = withContext(Dispatchers.IO) {
+        val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0L }
+        val bytes = if (localFile != null) {
+            localFile.readBytes()
+        } else {
+            ComicImageLoader.fetchImageBytes(context, page.imageUrl, page.refererUrl)?.bytes
+        } ?: return@withContext false
+
+        if (bytes.isEmpty() || ComicImageLoader.looksLikeHtmlNotImage(bytes)) return@withContext false
+        val out = context.contentResolver.openOutputStream(outputUri) ?: return@withContext false
+        out.use { it.write(bytes) }
+        true
     }
 
     private suspend fun downloadSinglePageInternal(
@@ -199,7 +260,7 @@ class ChapterDownloadManager(
         displayName: String,
         mimeType: String,
         relativePath: String
-    ) {
+    ): Boolean {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
@@ -209,17 +270,19 @@ class ChapterDownloadManager(
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
         }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
-        try {
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+        return try {
             resolver.openOutputStream(uri)?.use { out ->
                 out.write(bytes)
-            }
+            } ?: return false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
                 resolver.update(uri, done, null, null)
             }
+            true
         } catch (_: Exception) {
             resolver.delete(uri, null, null)
+            false
         }
     }
 

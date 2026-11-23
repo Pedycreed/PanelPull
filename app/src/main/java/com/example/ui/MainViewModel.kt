@@ -21,6 +21,7 @@ import com.example.data.model.DetectedChapterLink
 import com.example.data.model.DownloadStatus
 import com.example.data.model.ExtractionResult
 import com.example.data.model.StudioAspectRatio
+import com.example.data.prefs.CustomAiSettings
 import com.example.data.prefs.UserPreferences
 import com.example.data.prefs.UserPreferencesRepository
 import com.example.data.stitch.SmartStitchConfig
@@ -130,6 +131,13 @@ sealed interface SmartStitchUiState {
     data class Error(val message: String) : SmartStitchUiState
 }
 
+sealed interface ApiKeyTestState {
+    data object Idle : ApiKeyTestState
+    data object Testing : ApiKeyTestState
+    data class Success(val message: String) : ApiKeyTestState
+    data class Error(val message: String) : ApiKeyTestState
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val extractorEngine = ComicExtractorEngine()
@@ -209,6 +217,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _smartStitchState = MutableStateFlow<SmartStitchUiState>(SmartStitchUiState.Idle)
     val smartStitchState: StateFlow<SmartStitchUiState> = _smartStitchState.asStateFlow()
 
+    private val _apiKeyTestState = MutableStateFlow<ApiKeyTestState>(ApiKeyTestState.Idle)
+    val apiKeyTestState: StateFlow<ApiKeyTestState> = _apiKeyTestState.asStateFlow()
+
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
@@ -238,6 +249,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDarkTheme(enabled: Boolean) {
         viewModelScope.launch { prefsRepository.setDarkTheme(enabled) }
+    }
+
+    fun resetApiKeyTestState() {
+        _apiKeyTestState.value = ApiKeyTestState.Idle
+    }
+
+    fun testCustomApiKey(settings: CustomAiSettings) {
+        viewModelScope.launch {
+            _apiKeyTestState.value = ApiKeyTestState.Testing
+            try {
+                val msg = aiRepository.testCustomApiConnection(settings)
+                _apiKeyTestState.value = ApiKeyTestState.Success(msg)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _apiKeyTestState.value = ApiKeyTestState.Error(
+                    e.localizedMessage ?: "Não foi possível validar a API Key."
+                )
+            }
+        }
+    }
+
+    fun saveCustomAiSettings(settings: CustomAiSettings) {
+        viewModelScope.launch {
+            prefsRepository.saveCustomAiSettings(settings)
+            _apiKeyTestState.value = ApiKeyTestState.Idle
+            val msg = if (settings.isCustomApiActive) {
+                "API Key salva com criptografia (${settings.provider.shortBadge})!"
+            } else {
+                "IA padrão do app (Firebase AI) ativada!"
+            }
+            _snackbarEvents.tryEmit(msg)
+        }
+    }
+
+    fun resetCustomAiSettings() {
+        viewModelScope.launch {
+            prefsRepository.clearCustomAiSettings()
+            _apiKeyTestState.value = ApiKeyTestState.Idle
+            _snackbarEvents.tryEmit("Chave removida. Voltando para a IA padrão do app.")
+        }
     }
 
     fun extractFromUrl(rawUrl: String = _urlInput.value) {
@@ -386,7 +438,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val aiFilter = aiRepository.filterExtractedPagesFast(
                     sourceUrl = rawResult.sourceUrl,
                     rawTitle = rawResult.seriesTitle,
-                    candidates = rawResult.pages
+                    candidates = rawResult.pages,
+                    aiSettings = prefs.customAiSettings
                 )
                 val keptSet = aiFilter.keptIndices.toSet()
                 val filteredPages = rawResult.pages
@@ -577,17 +630,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun downloadSinglePage(page: PageEntity, chapter: ChapterEntity, seriesTitle: String) {
         viewModelScope.launch {
-            val file = downloadManager.downloadSinglePage(
+            val outcome = downloadManager.downloadSinglePage(
                 page = page,
                 chapter = chapter,
                 seriesTitle = seriesTitle,
                 saveToGalleryPictures = preferences.value.saveToGalleryPictures
             )
             refreshCurrentExtractionIfMatches(chapter.id)
-            if (file != null) {
-                _snackbarEvents.tryEmit("Página ${page.pageIndex + 1} salva: ${file.name}")
+            if (outcome != null) {
+                val label = if (chapter.chapterLabel.contains("SmartStitch", ignoreCase = true) ||
+                    chapter.sourceUrl.endsWith("#smartstitch") ||
+                    chapter.folderPath.contains("_SmartStitch", ignoreCase = true)
+                ) {
+                    "Tira #${(page.pageIndex + 1).toString().padStart(3, '0')}"
+                } else {
+                    "Página ${page.pageIndex + 1}"
+                }
+                val suffix = if (outcome.savedToGallery) {
+                    " salva na Galeria (${outcome.galleryDisplayPath})!"
+                } else {
+                    " salva: ${outcome.file.name}"
+                }
+                _snackbarEvents.tryEmit("$label$suffix")
             } else {
                 _snackbarEvents.tryEmit("Falha ao baixar página ${page.pageIndex + 1}.")
+            }
+        }
+    }
+
+    fun exportSinglePageToUri(page: PageEntity, outputUri: Uri, label: String) {
+        viewModelScope.launch {
+            val ok = downloadManager.exportSinglePageToUri(page, outputUri)
+            if (ok) {
+                _snackbarEvents.tryEmit("$label salva no local escolhido!")
+            } else {
+                _snackbarEvents.tryEmit("Não foi possível salvar $label.")
             }
         }
     }
@@ -703,10 +780,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeAiJob = viewModelScope.launch {
             _aiState.value = AiUiState.Loading
             try {
+                val aiSettings = preferences.value.customAiSettings
                 val stream = when (mode) {
-                    AiAnalysisMode.VISION_FAST -> aiRepository.analyzeComicPageStream(bitmap!!, cleanPrompt)
-                    AiAnalysisMode.HIGH_THINKING -> aiRepository.analyzeDeepThinkingStream(bitmap, cleanPrompt)
-                    AiAnalysisMode.GENERAL_ASSISTANT -> aiRepository.askGeneralAssistantStream(bitmap, cleanPrompt)
+                    AiAnalysisMode.VISION_FAST -> aiRepository.analyzeComicPageStream(bitmap!!, cleanPrompt, aiSettings)
+                    AiAnalysisMode.HIGH_THINKING -> aiRepository.analyzeDeepThinkingStream(bitmap, cleanPrompt, aiSettings)
+                    AiAnalysisMode.GENERAL_ASSISTANT -> aiRepository.askGeneralAssistantStream(bitmap, cleanPrompt, aiSettings)
                 }
                 var lastText = ""
                 stream.collect { partial ->
@@ -746,7 +824,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     prompt = cleanPrompt,
                     aspectRatio = ratio,
                     useProQuality = useProQuality,
-                    referenceBitmap = reference
+                    referenceBitmap = reference,
+                    aiSettings = preferences.value.customAiSettings
                 )
                 _studioState.value = StudioUiState.Success(
                     bitmap = bitmap,

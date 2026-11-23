@@ -30,14 +30,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import android.os.Build
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
@@ -80,6 +83,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.extractor.ComicImageLoader
+import com.example.data.local.ChapterEntity
 import com.example.data.local.PageEntity
 import com.example.data.stitch.SmartStitchConfig
 import com.example.data.stitch.StitchDetectorMode
@@ -105,6 +109,8 @@ fun SmartStitchDialog(
     onCancelStitch: () -> Unit,
     onOpenStitchedReader: (chapterId: Long, pageIndex: Int) -> Unit,
     onCopyStitchedPage: (PageEntity) -> Unit,
+    onDownloadStitchedPage: (PageEntity, ChapterEntity, String) -> Unit,
+    onExportStitchedPageToUri: (PageEntity, Uri, String) -> Unit,
     onShareStitchedPage: (PageEntity) -> Unit,
     onExportStitchedCbz: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit
 ) {
@@ -155,6 +161,19 @@ fun SmartStitchDialog(
         }
         pendingCbzChapter = null
     }
+
+    var pendingSingleStrip by remember { mutableStateOf<Pair<PageEntity, String>?>(null) }
+    val singleStripSaveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/*")
+    ) { uri ->
+        val pending = pendingSingleStrip
+        if (uri != null && pending != null) {
+            onExportStitchedPageToUri(pending.first, uri, pending.second)
+        }
+        pendingSingleStrip = null
+    }
+
+    var downloadedStripIds by remember(stitchState) { mutableStateOf<Set<Long>>(emptySet()) }
 
     val isRunning = stitchState is SmartStitchUiState.Running
     val isSuccess = stitchState is SmartStitchUiState.Success
@@ -362,7 +381,7 @@ fun SmartStitchDialog(
                                                 .height(48.dp)
                                                 .testTag("smartstitch_open_reader_button")
                                         ) {
-                                            Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(6.dp))
                                             Text("Abrir Leitor", maxLines = 1)
                                         }
@@ -743,84 +762,165 @@ fun SmartStitchDialog(
                     val stitchedPages = stitchState.chapterWithPages.pages.sortedBy { it.pageIndex }
                     items(stitchedPages, key = { "strip_${it.id}_${it.pageIndex}" }) { stripPage ->
                         val file = stripPage.localFilePath?.let { File(it) }?.takeIf { it.exists() }
+                        val isSavedIndividually = stripPage.id in downloadedStripIds
+                        val stripNumLabel = (stripPage.pageIndex + 1).toString().padStart(3, '0')
+                        val stripExt = file?.extension?.takeIf { it.isNotBlank() } ?: "jpg"
+                        val suggestedStripName = "${stitchState.seriesTitle.replace(Regex("[^A-Za-z0-9._-]"), "_")}_SmartStitch_$stripNumLabel.$stripExt"
                         Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainer
                             ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
                                         onOpenStitchedReader(stitchState.chapterWithPages.chapter.id, stripPage.pageIndex)
                                     }
                                     .padding(12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(width = 64.dp, height = 92.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    AsyncImage(
-                                        model = ComicImageLoader.buildImageRequest(
-                                            context = context,
-                                            localFile = file,
-                                            imageUrl = stripPage.imageUrl,
-                                            refererUrl = ""
-                                        ),
-                                        imageLoader = imageLoader,
-                                        contentDescription = "Tira SmartStitch ${stripPage.pageIndex + 1}",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 64.dp, height = 92.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                                    ) {
+                                        AsyncImage(
+                                            model = ComicImageLoader.buildImageRequest(
+                                                context = context,
+                                                localFile = file,
+                                                imageUrl = stripPage.imageUrl,
+                                                refererUrl = ""
+                                            ),
+                                            imageLoader = imageLoader,
+                                            contentDescription = "Tira SmartStitch ${stripPage.pageIndex + 1}",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
 
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Tira #${(stripPage.pageIndex + 1).toString().padStart(3, '0')}",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "${stripPage.width} × ${stripPage.height} px",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    if (stripPage.fileSizeBytes > 0L) {
-                                        val kb = stripPage.fileSizeBytes / 1024L
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Tira #$stripNumLabel",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            if (isSavedIndividually) {
+                                                Icon(
+                                                    imageVector = Icons.Default.CheckCircle,
+                                                    contentDescription = "Baixada",
+                                                    tint = EmeraldSuccess,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
                                         Text(
-                                            text = if (kb >= 1024) {
-                                                String.format(Locale.US, "%.1f MB", kb / 1024f)
-                                            } else {
-                                                "$kb KB"
-                                            },
+                                            text = "${stripPage.width} × ${stripPage.height} px",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (stripPage.fileSizeBytes > 0L) {
+                                            val kb = stripPage.fileSizeBytes / 1024L
+                                            Text(
+                                                text = if (kb >= 1024) {
+                                                    String.format(Locale.US, "%.1f MB", kb / 1024f)
+                                                } else {
+                                                    "$kb KB"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.secondary
+                                            )
+                                        }
+                                        Text(
+                                            text = "Toque na tira para abrir no leitor",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.secondary
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
 
-                                FilledTonalIconButton(
-                                    onClick = { onCopyStitchedPage(stripPage) },
-                                    modifier = Modifier.size(48.dp)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Default.ContentCopy,
-                                        contentDescription = "Copiar tira ${stripPage.pageIndex + 1}"
-                                    )
-                                }
-                                FilledTonalIconButton(
-                                    onClick = { onShareStitchedPage(stripPage) },
-                                    modifier = Modifier.size(48.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Share,
-                                        contentDescription = "Compartilhar tira ${stripPage.pageIndex + 1}"
-                                    )
+                                    FilledTonalButton(
+                                        onClick = {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                                downloadedStripIds = downloadedStripIds + stripPage.id
+                                                onDownloadStitchedPage(
+                                                    stripPage,
+                                                    stitchState.chapterWithPages.chapter,
+                                                    stitchState.seriesTitle
+                                                )
+                                            } else {
+                                                pendingSingleStrip = stripPage to "Tira #$stripNumLabel"
+                                                singleStripSaveLauncher.launch(suggestedStripName)
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(48.dp)
+                                            .testTag("smartstitch_download_strip_${stripPage.pageIndex}")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Download,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isSavedIndividually) "Baixada" else "Baixar",
+                                            maxLines = 1
+                                        )
+                                    }
+                                    FilledTonalIconButton(
+                                        onClick = {
+                                            pendingSingleStrip = stripPage to "Tira #$stripNumLabel"
+                                            singleStripSaveLauncher.launch(suggestedStripName)
+                                        },
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("smartstitch_save_as_strip_${stripPage.pageIndex}")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.FolderOpen,
+                                            contentDescription = "Salvar tira ${stripPage.pageIndex + 1} em pasta"
+                                        )
+                                    }
+                                    FilledTonalIconButton(
+                                        onClick = { onCopyStitchedPage(stripPage) },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ContentCopy,
+                                            contentDescription = "Copiar tira ${stripPage.pageIndex + 1}"
+                                        )
+                                    }
+                                    FilledTonalIconButton(
+                                        onClick = { onShareStitchedPage(stripPage) },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Share,
+                                            contentDescription = "Compartilhar tira ${stripPage.pageIndex + 1}"
+                                        )
+                                    }
                                 }
                             }
                         }
