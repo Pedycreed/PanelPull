@@ -22,11 +22,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -71,6 +72,7 @@ fun LibraryScreen(
     onDownloadChapter: (chapterId: Long, seriesTitle: String) -> Unit,
     onSmartStitchChapter: (ChapterWithPages, seriesTitle: String, comicFormat: String) -> Unit,
     onSmartStitchGallery: () -> Unit,
+    onExportZip: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit,
     onExportCbz: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit,
     onDeleteChapter: (ChapterEntity) -> Unit,
     onDeleteSeries: (SeriesEntity) -> Unit,
@@ -87,6 +89,17 @@ fun LibraryScreen(
             onExportCbz(pending.second, uri, pending.first)
         }
         pendingExportChapter = null
+    }
+
+    var pendingZipChapter by remember { mutableStateOf<Pair<String, List<PageEntity>>?>(null) }
+    val createZipLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val pending = pendingZipChapter
+        if (uri != null && pending != null) {
+            onExportZip(pending.second, uri, pending.first)
+        }
+        pendingZipChapter = null
     }
 
     Box(
@@ -190,8 +203,13 @@ fun LibraryScreen(
                         onSmartStitchChapter = { chWithPages ->
                             onSmartStitchChapter(chWithPages, seriesItem.series.title, seriesItem.series.comicFormat)
                         },
+                        onRequestZipExport = { chLabel, pages ->
+                            val cleanName = "${seriesItem.series.slug}_${chLabel.replace(Regex("[^A-Za-z0-9._-]"), "_")}.zip"
+                            pendingZipChapter = "${seriesItem.series.title} • $chLabel" to pages
+                            createZipLauncher.launch(cleanName)
+                        },
                         onRequestCbzExport = { chLabel, pages ->
-                            val cleanName = "${seriesItem.series.slug}_${chLabel.replace(" ", "_")}.cbz"
+                            val cleanName = "${seriesItem.series.slug}_${chLabel.replace(Regex("[^A-Za-z0-9._-]"), "_")}.cbz"
                             pendingExportChapter = "${seriesItem.series.title} • $chLabel" to pages
                             createCbzLauncher.launch(cleanName)
                         },
@@ -210,6 +228,7 @@ private fun SeriesArchiveCard(
     onOpenReader: (Long) -> Unit,
     onDownloadChapter: (Long) -> Unit,
     onSmartStitchChapter: (ChapterWithPages) -> Unit,
+    onRequestZipExport: (chapterLabel: String, pages: List<PageEntity>) -> Unit,
     onRequestCbzExport: (chapterLabel: String, pages: List<PageEntity>) -> Unit,
     onDeleteChapter: (ChapterEntity) -> Unit,
     onDeleteSeries: () -> Unit
@@ -316,6 +335,9 @@ private fun SeriesArchiveCard(
                     onOpenReader = { onOpenReader(chWithPages.chapter.id) },
                     onDownload = { onDownloadChapter(chWithPages.chapter.id) },
                     onSmartStitch = { onSmartStitchChapter(chWithPages) },
+                    onExportZip = {
+                        onRequestZipExport(chWithPages.chapter.chapterLabel, chWithPages.pages)
+                    },
                     onExportCbz = {
                         onRequestCbzExport(chWithPages.chapter.chapterLabel, chWithPages.pages)
                     },
@@ -332,6 +354,7 @@ private fun ChapterArchiveRow(
     onOpenReader: () -> Unit,
     onDownload: () -> Unit,
     onSmartStitch: () -> Unit,
+    onExportZip: () -> Unit,
     onExportCbz: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -385,7 +408,7 @@ private fun ChapterArchiveRow(
                         .height(48.dp)
                         .testTag("library_open_chapter_${ch.id}")
                 ) {
-                    Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Ler / Copiar", maxLines = 1)
                 }
@@ -403,28 +426,58 @@ private fun ChapterArchiveRow(
                     }
                 } else {
                     OutlinedButton(
-                        onClick = onExportCbz,
+                        onClick = onExportZip,
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
+                            .testTag("library_export_zip_${ch.id}")
+                    ) {
+                        Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Export .ZIP", maxLines = 1)
+                    }
+                }
+            }
+
+            if (isComplete) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onSmartStitch,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("library_smartstitch_chapter_${ch.id}")
+                    ) {
+                        Icon(Icons.Default.ViewAgenda, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("SmartStitch", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onExportCbz,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
                     ) {
                         Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Export .CBZ", maxLines = 1)
                     }
                 }
-            }
-
-            OutlinedButton(
-                onClick = onSmartStitch,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .testTag("library_smartstitch_chapter_${ch.id}")
-            ) {
-                Icon(Icons.Default.ViewAgenda, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Juntar Páginas (SmartStitch)", maxLines = 1)
+            } else {
+                OutlinedButton(
+                    onClick = onSmartStitch,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("library_smartstitch_chapter_${ch.id}")
+                ) {
+                    Icon(Icons.Default.ViewAgenda, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Juntar Páginas (SmartStitch)", maxLines = 1)
+                }
             }
         }
     }

@@ -289,14 +289,37 @@ class ChapterDownloadManager(
     suspend fun exportChapterToCbzUri(
         pages: List<PageEntity>,
         outputUri: Uri
+    ): Int = exportPagesToArchiveUri(pages, outputUri)
+
+    suspend fun exportChapterToZipUri(
+        pages: List<PageEntity>,
+        outputUri: Uri
+    ): Int = exportPagesToArchiveUri(pages, outputUri)
+
+    private suspend fun exportPagesToArchiveUri(
+        pages: List<PageEntity>,
+        outputUri: Uri
     ): Int = withContext(Dispatchers.IO) {
         var packed = 0
+        val usedNames = HashSet<String>()
         val outStream = context.contentResolver.openOutputStream(outputUri) ?: return@withContext 0
         ZipOutputStream(BufferedOutputStream(outStream)).use { zip ->
-            pages.sortedBy { it.pageIndex }.forEach { page ->
-                val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() }
+            pages.sortedBy { it.pageIndex }.forEachIndexed { idx, page ->
+                val localFile = page.localFilePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0L }
                 if (localFile != null) {
-                    zip.putNextEntry(ZipEntry(localFile.name))
+                    val safeName = localFile.name
+                        .substringAfterLast('/')
+                        .substringAfterLast('\\')
+                        .ifBlank { "${(idx + 1).toString().padStart(3, '0')}.jpg" }
+                    val uniqueName = if (usedNames.add(safeName)) {
+                        safeName
+                    } else {
+                        val ext = localFile.extension.ifBlank { "jpg" }
+                        "${(idx + 1).toString().padStart(3, '0')}_$safeName".let { candidate ->
+                            if (usedNames.add(candidate)) candidate else "strip_${idx + 1}.$ext"
+                        }
+                    }
+                    zip.putNextEntry(ZipEntry(uniqueName))
                     FileInputStream(localFile).use { input ->
                         input.copyTo(zip)
                     }

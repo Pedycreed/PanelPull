@@ -258,6 +258,7 @@ fun PanelPullApp(
                                     viewModel.openSmartStitchForGallery(emptyList())
                                 },
                                 onToggleViewingStitched = viewModel::setViewingStitched,
+                                onExportChapterZip = viewModel::exportChapterAsZip,
                                 onOpenApiKeySettings = {
                                     viewModel.resetApiKeyTestState()
                                     showApiKeySettings = true
@@ -276,6 +277,7 @@ fun PanelPullApp(
                                 onSmartStitchGallery = {
                                     viewModel.openSmartStitchForGallery(emptyList())
                                 },
+                                onExportZip = viewModel::exportChapterAsZip,
                                 onExportCbz = viewModel::exportChapterAsCbz,
                                 onDeleteChapter = viewModel::deleteChapter,
                                 onDeleteSeries = viewModel::deleteSeries,
@@ -393,6 +395,7 @@ fun PanelPullApp(
                     onDownloadStitchedPage = viewModel::downloadSinglePage,
                     onExportStitchedPageToUri = viewModel::exportSinglePageToUri,
                     onShareStitchedPage = viewModel::sharePage,
+                    onExportStitchedZip = viewModel::exportChapterAsZip,
                     onExportStitchedCbz = viewModel::exportChapterAsCbz
                 )
             }

@@ -686,6 +686,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun exportChapterAsZip(pages: List<PageEntity>, outputUri: Uri, label: String) {
+        viewModelScope.launch {
+            val packed = downloadManager.exportChapterToZipUri(pages, outputUri)
+            if (packed > 0) {
+                _snackbarEvents.tryEmit("$label exportado em .ZIP ($packed tiras/páginas)!")
+            } else {
+                _snackbarEvents.tryEmit("Nenhuma página local encontrada para exportar em .ZIP.")
+            }
+        }
+    }
+
     fun deleteChapter(chapter: ChapterEntity) {
         viewModelScope.launch {
             libraryRepository.deleteChapter(chapter)

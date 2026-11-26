@@ -495,4 +495,50 @@ class ExampleRobolectricTest {
         assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://169.254.169.254/latest"))
         assertEquals(null, com.example.data.prefs.ApiKeySecureStore.validateHttpsBaseUrl("https://192.168.1.5/v1"))
     }
+
+    @Test
+    fun `exportChapterToZipUri packs all stitched pages in order into a valid zip archive`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.data.local.AppDatabase::class.java
+        ).allowMainThreadQueries().build()
+
+        val tempRoot = java.io.File(context.cacheDir, "smartstitch_zip_test_${System.currentTimeMillis()}").apply { mkdirs() }
+        val repo = com.example.data.local.LibraryRepository(db.comicDao(), tempRoot)
+        val manager = com.example.data.extractor.ChapterDownloadManager(
+            context = context,
+            repository = repo,
+            okHttpClient = ComicExtractorEngine.defaultHttpClient()
+        )
+
+        try {
+            val s1 = java.io.File(tempRoot, "001.jpg").apply { writeBytes(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3, 4)) }
+            val s2 = java.io.File(tempRoot, "002.jpg").apply { writeBytes(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 5, 6, 7, 8)) }
+            val pages = listOf(
+                com.example.data.local.PageEntity(id = 2, chapterId = 1, pageIndex = 1, imageUrl = s2.toURI().toString(), refererUrl = "", localFilePath = s2.absolutePath, isDownloaded = true),
+                com.example.data.local.PageEntity(id = 1, chapterId = 1, pageIndex = 0, imageUrl = s1.toURI().toString(), refererUrl = "", localFilePath = s1.absolutePath, isDownloaded = true)
+            )
+            val zipOut = java.io.File(tempRoot, "stitched_export.zip")
+            val packed = kotlinx.coroutines.runBlocking {
+                manager.exportChapterToZipUri(pages, android.net.Uri.fromFile(zipOut))
+            }
+            assertEquals(2, packed)
+            assertTrue(zipOut.exists() && zipOut.length() > 0L)
+
+            val entries = mutableListOf<String>()
+            java.util.zip.ZipInputStream(zipOut.inputStream()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    entries.add(entry.name)
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            assertEquals(listOf("001.jpg", "002.jpg"), entries)
+        } finally {
+            db.close()
+            tempRoot.deleteRecursively()
+        }
+    }
 }

@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
@@ -112,6 +113,7 @@ fun SmartStitchDialog(
     onDownloadStitchedPage: (PageEntity, ChapterEntity, String) -> Unit,
     onExportStitchedPageToUri: (PageEntity, Uri, String) -> Unit,
     onShareStitchedPage: (PageEntity) -> Unit,
+    onExportStitchedZip: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit,
     onExportStitchedCbz: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit
 ) {
     BackHandler(onBack = onDismiss)
@@ -160,6 +162,17 @@ fun SmartStitchDialog(
             onExportStitchedCbz(pending.second, uri, pending.first)
         }
         pendingCbzChapter = null
+    }
+
+    var pendingZipChapter by remember { mutableStateOf<Pair<String, List<PageEntity>>?>(null) }
+    val zipExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val pending = pendingZipChapter
+        if (uri != null && pending != null) {
+            onExportStitchedZip(pending.second, uri, pending.first)
+        }
+        pendingZipChapter = null
     }
 
     var pendingSingleStrip by remember { mutableStateOf<Pair<PageEntity, String>?>(null) }
@@ -368,11 +381,32 @@ fun SmartStitchDialog(
                                         }
                                     }
 
+                                    val safeBaseName = remember(state.seriesTitle, state.chapterWithPages.chapter.chapterNumber) {
+                                        val s = state.seriesTitle.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_').ifBlank { "PanelPull" }
+                                        val c = state.chapterWithPages.chapter.chapterNumber.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_')
+                                        if (c.isNotBlank()) "${s}_Cap${c}_SmartStitch" else "${s}_SmartStitch"
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            pendingZipChapter = "${state.seriesTitle} • SmartStitch" to stitchedPages
+                                            zipExportLauncher.launch("$safeBaseName.zip")
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp)
+                                            .testTag("smartstitch_export_zip_button")
+                                    ) {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Exportar todas em .ZIP (${stitchedPages.size} tiras)", maxLines = 1)
+                                    }
+
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Button(
+                                        FilledTonalButton(
                                             onClick = {
                                                 onOpenStitchedReader(state.chapterWithPages.chapter.id, 0)
                                             },
@@ -387,9 +421,8 @@ fun SmartStitchDialog(
                                         }
                                         OutlinedButton(
                                             onClick = {
-                                                val safeName = "${state.seriesTitle.replace(" ", "_")}_SmartStitch.cbz"
                                                 pendingCbzChapter = "${state.seriesTitle} • SmartStitch" to stitchedPages
-                                                cbzExportLauncher.launch(safeName)
+                                                cbzExportLauncher.launch("$safeBaseName.cbz")
                                             },
                                             modifier = Modifier
                                                 .weight(1f)

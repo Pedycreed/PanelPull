@@ -2,6 +2,9 @@ package com.example.ui.screens
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -134,6 +137,7 @@ fun ExtractorScreen(
     onOpenSmartStitchChapter: (ChapterWithPages, seriesTitle: String, comicFormat: String) -> Unit,
     onOpenSmartStitchGallery: () -> Unit,
     onToggleViewingStitched: (Boolean) -> Unit,
+    onExportChapterZip: (pages: List<PageEntity>, outputUri: Uri, label: String) -> Unit,
     onOpenApiKeySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -141,6 +145,17 @@ fun ExtractorScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     var isGridView by remember { mutableStateOf(true) }
     var showAdvancedSettings by remember { mutableStateOf(false) }
+
+    var pendingZipExport by remember { mutableStateOf<Pair<String, List<PageEntity>>?>(null) }
+    val zipExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val pending = pendingZipExport
+        if (uri != null && pending != null) {
+            onExportChapterZip(pending.second, uri, pending.first)
+        }
+        pendingZipExport = null
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -955,6 +970,27 @@ fun ExtractorScreen(
                                             Icon(Icons.Default.Download, contentDescription = null)
                                             Spacer(Modifier.width(8.dp))
                                             Text("${stringResource(R.string.action_download_chapter)} (${pages.size})")
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                val safeSeries = state.seriesTitle.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_').ifBlank { "PanelPull" }
+                                                val safeCh = chapter.chapterNumber.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_')
+                                                val fileName = if (safeCh.isNotBlank()) "${safeSeries}_Cap${safeCh}_SmartStitch.zip" else "${safeSeries}_SmartStitch.zip"
+                                                pendingZipExport = "${state.seriesTitle} • SmartStitch" to pages
+                                                zipExportLauncher.launch(fileName)
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(48.dp)
+                                                .testTag("extractor_export_stitched_zip_button")
+                                        ) {
+                                            Icon(Icons.Default.FolderZip, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Exportar SmartStitch em .ZIP (${pages.size} tiras)", maxLines = 1)
                                         }
                                     }
 
